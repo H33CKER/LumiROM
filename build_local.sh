@@ -90,7 +90,7 @@ VALIDATION
 
 # --- System Environment Variables ---
 export OUTPUT_FILESYSTEM="erofs"
-export LUMIROM_VERSION="8.6.4"
+export LUMIROM_VERSION="8.6.5"
 export LUMIROM_CODE="${LUMIROM_VERSION//./0}"
 export OUT_DIR="$PWD/OUT"
 export WORK_DIR="$PWD/TMP/LumiWORK"
@@ -213,6 +213,7 @@ cp -fv "$WORK_DIR"/*.jar "FIRMWARE/system/system/framework/" 2>&1 | tee -a "$LOG
 
 log_section "Building ROM"
 source scripts/features/LumiROM.sh 2>&1 | tee -a "$LOG_FILE"
+REPLACE_OTACERTS "$FIRM_DIR" 2>&1 | tee -a "$LOG_FILE"
 BUILD_IMG "$FIRM_DIR" "$OUTPUT_FILESYSTEM" "$OUT_DIR" 2>&1 | tee -a "$LOG_FILE"
 
 source scripts/package/zip_creation.sh
@@ -227,6 +228,15 @@ else
     UPDATE_ZIP_SCRIPT "$FIRM_DIR" 2>&1 | tee -a "$LOG_FILE"
     FLASHABLE_ZIP_CREATION 2>&1 | tee -a "$LOG_FILE"
 
+    log_section "Signing OTA package"
+    source scripts/package/sign_ota.sh
+    OTA_ZIP=$(find ./ROM/"$FOLDER_NAME" -type f -name "*.zip" ! -name "*INCREMENTAL*" 2>/dev/null | head -n 1)
+    if [ -n "$OTA_ZIP" ]; then
+        SIGN_OTA_ZIP "$OTA_ZIP" 2>&1 | tee -a "$LOG_FILE"
+    else
+        log_message "No flashable zip found to sign, skipping."
+    fi
+
     log_section "Saving target files"
     CREATE_TARGET_FILES "$PWD/TARGET_FILES/LumiROM_TARGET_${LUMIROM_VERSION}_${STOCK_DEVICE}.zip" 2>&1 | tee -a "$LOG_FILE"
 
@@ -238,7 +248,7 @@ else
 fi
 
 log_message "Cleaning up temporary directories..."
-rm -rf ./OUT/ ./TMP/ ./WORK/ ./FIRMWARE/ 2>&1 | tee -a "$LOG_FILE"
+sudo rm -rf ./OUT/ ./TMP/ ./WORK/ ./FIRMWARE/ ./makerom/ 2>&1 | tee -a "$LOG_FILE"
 
 log_message "✓ LumiROM $LUMIROM_VERSION for $STOCK_DEVICE is ready!"
 log_message "✓ You can find it in the ROM folder"
