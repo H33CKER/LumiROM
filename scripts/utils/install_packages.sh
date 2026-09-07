@@ -17,6 +17,7 @@ UBUNTU_PACKAGES() {
         xxd
         android-sdk-build-tools
         patch
+        signapk
         e2fsprogs
         zstd
         aria2

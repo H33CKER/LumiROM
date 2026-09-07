@@ -272,7 +272,9 @@ jobs:
     - name: Build ROM
       shell: bash
       run: |
+        source scripts/firmware/FW.sh
         source scripts/features/LumiROM.sh
+        REPLACE_OTACERTS "$FIRM_DIR"
         BUILD_IMG "$FIRM_DIR" "$OUTPUT_FILESYSTEM" "$OUT_DIR"
         if [ "$ZIP_IMG" != "true" ]; then
           IMG_TO_BROTLI "$OUT_DIR" "TMP"
@@ -291,6 +293,21 @@ jobs:
       run: |
         source scripts/package/zip_creation.sh
         FLASHABLE_ZIP_CREATION
+
+    - name: Sign OTA package
+      if: ${{ github.event.inputs.ZIP_IMG != 'true' }}
+      shell: bash
+      env:
+        OTA_PK8: ${{ secrets.OTA_PK8 }}
+        OTA_CERT: ${{ secrets.OTA_CERT }}
+      run: |
+        source scripts/package/sign_ota.sh
+        OTA_ZIP=$(find ./ROM/"$FOLDER_NAME" -type f -name "*.zip" ! -name "*INCREMENTAL*" | head -n 1)
+        if [ -n "$OTA_ZIP" ]; then
+          SIGN_OTA_ZIP "$OTA_ZIP"
+        else
+          echo "No flashable zip found to sign, skipping."
+        fi
 
     - name: Prepare IMG zip
       if: ${{ github.event.inputs.ZIP_IMG == 'true' }}

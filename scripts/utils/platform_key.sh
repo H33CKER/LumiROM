@@ -63,3 +63,34 @@ GET_ACTIVE_KEY_FILES() {
 
     echo "$KEY_DIR"
 }
+
+# Materializes the active OTA key pair (private key + certificate) into a
+# directory and prints that directory path. Uses:
+#   - $OTA_PK8/$OTA_CERT (secrets, CI official) if set
+#   - $HOME/.lumi/keys/ota.* if present
+# There is no testkey fallback for OTA: without a real key the OTA package
+# cannot be signed, so an empty result means "do not sign".
+GET_ACTIVE_OTA_KEY_FILES() {
+    local KEY_DIR=""
+
+    if [ -n "$OTA_PK8" ] && [ -n "$OTA_CERT" ]; then
+        KEY_DIR="$(mktemp -d)"
+        printf '%s' "$OTA_PK8" | base64 -d > "$KEY_DIR/ota.pk8"
+        printf '%s' "$OTA_CERT" > "$KEY_DIR/ota.x509.pem"
+    elif [ -f "$HOME/.lumi/keys/ota.pk8" ] && [ -f "$HOME/.lumi/keys/ota.x509.pem" ]; then
+        KEY_DIR="$HOME/.lumi/keys"
+    else
+        echo "${YELLOW}No OTA signing key found (secrets or ~/.lumi/keys/ota.*). Skipping OTA signature.${RESET}" >&2
+    fi
+
+    echo "$KEY_DIR"
+}
+
+# Prints the PEM of the active OTA certificate, or nothing if no OTA key is set.
+GET_ACTIVE_OTA_CERT() {
+    if [ -n "$OTA_CERT" ]; then
+        printf '%s' "$OTA_CERT"
+    elif [ -f "$HOME/.lumi/keys/ota.x509.pem" ]; then
+        cat "$HOME/.lumi/keys/ota.x509.pem"
+    fi
+}
