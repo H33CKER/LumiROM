@@ -1141,6 +1141,7 @@ REPLACE_OTACERTS() {
     mkdir -p "$(dirname "$OUT_OTACERTS")"
 
     echo "${YELLOW}Building otacerts.zip with LumiROM OTA certificate only...${RESET}"
+    rm -f "$OUT_OTACERTS"
     (cd "$TMP_DIR" && zip -q "$OUT_OTACERTS" "$CERT_NAME")
 
     rm -rf "$TMP_DIR"

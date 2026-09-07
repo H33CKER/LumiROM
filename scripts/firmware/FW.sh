@@ -438,7 +438,8 @@ EXTRACT_FIRMWARE_IMG() {
 
     wait
 
-    # Correct owner and permissions of the extracted configs
+    # Correct owner and permissions of extracted ext4 partitions
+    sudo chown -R $USER:$USER "$FIRM_DIR/vendor/"
     sudo chown -R $USER:$USER "$FIRM_DIR/config/"
     sudo chmod -R 755 "$FIRM_DIR/config/"
 }
