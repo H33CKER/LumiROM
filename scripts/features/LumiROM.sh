@@ -547,6 +547,121 @@ AUTO_FIX_SELINUX() {
 }
 
 
+REMOVE_LINE() {
+    if [ "$#" -ne 2 ]; then
+        echo "Usage: ${FUNCNAME[0]} <TARGET_LINE> <TARGET_FILE>"
+        return 1
+    fi
+
+    local LINE="$1"
+    local FILE="$2"
+
+    echo "${YELLOW}Deleting${RESET} $LINE ${YELLOW}from${RESET} $FILE"
+    grep -vxF "$LINE" "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
+}
+
+
+# FIX_PROPERTY_CONTEXTS
+# Removes duplicate property-context prefixes across the four *_property_contexts
+# files. init fails at boot with "Unable to serialize property contexts: Duplicate
+# prefix match detected for 'X'" when a prefix is active in more than one entry
+# (cross-file or within the same file). This firmware has several such duplicates
+# (e.g. init.svc.vendor.wvkprov_server_hal in both system_ext and vendor).
+#
+# Priority when a prefix is duplicated: vendor > product > system_ext > plat.
+# Within the same file, the entry with the most fields (most specific) is kept.
+FIX_PROPERTY_CONTEXTS() {
+    local EXTRACTED_FIRM_DIR="${1%/}"
+
+    local PLAT="$EXTRACTED_FIRM_DIR/system/system/etc/selinux/plat_property_contexts"
+
+    local SYSTEM_EXT_DIR
+    if [ -d "$EXTRACTED_FIRM_DIR/system/system_ext/etc/selinux" ]; then
+        SYSTEM_EXT_DIR="$EXTRACTED_FIRM_DIR/system/system_ext"
+    elif [ -d "$EXTRACTED_FIRM_DIR/system/system/system_ext/etc/selinux" ]; then
+        SYSTEM_EXT_DIR="$EXTRACTED_FIRM_DIR/system/system/system_ext"
+    else
+        SYSTEM_EXT_DIR="${TARGET_ROM_SYSTEM_EXT_DIR:-$EXTRACTED_FIRM_DIR/system/system/system_ext}"
+    fi
+    local SYSTEM_EXT="$SYSTEM_EXT_DIR/etc/selinux/system_ext_property_contexts"
+
+    local PRODUCT="$EXTRACTED_FIRM_DIR/product/etc/selinux/product_property_contexts"
+    local VENDOR="$EXTRACTED_FIRM_DIR/vendor/etc/selinux/vendor_property_contexts"
+
+    echo "${YELLOW}Fixing duplicate property-context prefixes${RESET}"
+
+    local FILES=("$PLAT" "$SYSTEM_EXT" "$PRODUCT" "$VENDOR")
+    local NAMES=("plat" "system_ext" "product" "vendor")
+
+    # Collect active lines: prefix<TAB>priority<TAB>name<TAB>line_number<TAB>field_count
+    local TMP_ALL=$(mktemp)
+    local i
+    for ((i=0; i<4; i++)); do
+        local f="${FILES[$i]}"
+        [ -f "$f" ] || continue
+        awk -v prio="$((i+1))" -v name="${NAMES[$i]}" \
+            '!/^#/ && $1 != "" {print $1 "\t" prio "\t" name "\t" NR "\t" NF}' "$f" >> "$TMP_ALL"
+    done
+
+    # Duplicate prefixes = prefixes appearing more than once
+    local TMP_DUPES=$(mktemp)
+    awk -F'\t' '
+        { n=$1; if (!(n in c)) { order[++o]=n } c[n]++ }
+        END { for (i=1;i<=o;i++) if (c[order[i]]>1) print order[i] }
+    ' "$TMP_ALL" > "$TMP_DUPES"
+
+    local COUNT
+    COUNT=$(wc -l < "$TMP_DUPES" | tr -d ' ')
+    if [ "$COUNT" -eq 0 ]; then
+        echo "${GREEN}  [+] No duplicate property-context prefixes.${RESET}"
+        rm -f "$TMP_ALL" "$TMP_DUPES"
+        return 0
+    fi
+
+    echo "  [!] $COUNT duplicate prefix(es):"
+    sed 's/^/    - /' "$TMP_DUPES"
+
+    local removed=0
+    while IFS= read -r prefix; do
+        [ -z "$prefix" ] && continue
+
+        # File to keep = the one with the highest priority
+        local keep_name
+        keep_name=$(awk -F'\t' -v p="$prefix" '$1==p {print $3 "\t" $2}' "$TMP_ALL" | sort -k2,2nr | head -1 | cut -f1)
+        [ -z "$keep_name" ] && continue
+
+        for ((i=0; i<4; i++)); do
+            local f="${FILES[$i]}"
+            [ -f "$f" ] || continue
+            local name="${NAMES[$i]}"
+
+            if [ "$name" == "$keep_name" ]; then
+                # In the kept file keep only the most specific (max field count) entry
+                local best
+                best=$(awk -F'\t' -v p="$prefix" -v n="$name" '$1==p && $3==n {print $5 "\t" $4}' "$TMP_ALL" | sort -k1,1nr -k2,2n | head -1 | cut -f2)
+                local TMP_OUT=$(mktemp)
+                awk -v p="$prefix" -v b="$best" '!/^#/ && $1==p && NR!=b {next} {print}' "$f" > "$TMP_OUT"
+                cp "$TMP_OUT" "$f" 2>/dev/null || echo "    [!] could not rewrite $name (permission)"
+                rm -f "$TMP_OUT"
+            else
+                # Remove the prefix entirely from lower-priority files
+                if awk -v p="$prefix" '!/^#/ && $1==p {found=1; exit} END {exit !found}' "$f"; then
+                    local TMP_OUT2=$(mktemp)
+                    awk -v p="$prefix" '!/^#/ && $1==p {next} {print}' "$f" > "$TMP_OUT2"
+                    cp "$TMP_OUT2" "$f" 2>/dev/null || echo "    [!] could not rewrite $name (permission)"
+                    rm -f "$TMP_OUT2"
+                    echo "    - removed '$prefix' from $name (kept in $keep_name)"
+                    removed=$((removed + 1))
+                fi
+            fi
+        done
+    done < "$TMP_DUPES"
+
+    rm -f "$TMP_ALL" "$TMP_DUPES"
+    echo "${GREEN}  [+] $removed duplicate property-context lines removed.${RESET}"
+}
+
+
 UPDATE_FLOATING_FEATURE() {
     local key="$1"
     local value="$2"
@@ -765,6 +880,9 @@ APPLY_STOCK_CONFIG() {
 	# Replace Stock Files.
 	rm -rf $EXTRACTED_FIRM_DIR/product/overlay/framework-res*auto_generated_rro_product.apk
     cp -af "$DEVICES_DIR/$STOCK_DEVICE/Stock/." "$EXTRACTED_FIRM_DIR/"
+
+    # Fix duplicate property-context prefixes (prevents init fatal bootloop).
+    FIX_PROPERTY_CONTEXTS "$EXTRACTED_FIRM_DIR"
 
 }
 
