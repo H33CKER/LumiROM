@@ -101,6 +101,16 @@ export APKTOOL="$PWD/bin/apktool/apktool.jar"
 export VNDKS_COLLECTION="$PWD/LumiROM/vndks"
 export BUILD_PARTITIONS="product,vendor,odm,system_ext,system"
 
+# Android build-tools (zipalign/apksigner) needed by REBUILD_AND_SIGN_APK.
+# Ubuntu ships them under /usr/lib/android-sdk/build-tools/debian/ (not in PATH).
+if [ -d "$HOME/Android/Sdk/build-tools" ]; then
+    BT_DIR=$(ls -d "$HOME"/Android/Sdk/build-tools/*/ 2>/dev/null | sort -V | tail -1)
+    export PATH="$BT_DIR:$PATH"
+fi
+if [ -d /usr/lib/android-sdk/build-tools/debian ]; then
+    export PATH="/usr/lib/android-sdk/build-tools/debian:$PATH"
+fi
+
 # --- Load Logging System ---
 source scripts/utils/logging.sh
 initialize_logs "$STOCK_DEVICE" "$TARGET_DEVICE" "$TARGET_CSC" "$TARGET_IMEI" "$LUMIROM_VERSION" "$USE_MODS" "$USE_GALAXY_AI" "$USE_UI_8_TETHERING_APEX" "$OUTPUT_FILESYSTEM" "$LUMIROM_MAINTAINER"
@@ -194,22 +204,28 @@ INSTALL_FRAMEWORK "FIRMWARE/system/system/framework/framework-res.apk" 2>&1 | te
 log_section "Patching Knox and Framework"
 DECOMPILE "$APKTOOL" "FIRMWARE/system/system/framework/ssrm.jar" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
 DECOMPILE "$APKTOOL" "FIRMWARE/system/system/framework/services.jar" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
+DECOMPILE "$APKTOOL" "FIRMWARE/system/system/priv-app/SecSettings/SecSettings.apk" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
 wait
 
 log_section "Applying Knox and Framework patches"
 source scripts/features/Knox_script.sh
+source scripts/utils/platform_key.sh
 PATCH_SSRM "$WORK_DIR/ssrm" 2>&1 | tee -a "$LOG_FILE"
 PATCH_KNOX_GUARD "$WORK_DIR/services" 2>&1 | tee -a "$LOG_FILE"
 PATCH_FLAG_SECURE "$WORK_DIR/services" 2>&1 | tee -a "$LOG_FILE"
 PATCH_SECURE_FOLDER "$WORK_DIR/services" 2>&1 | tee -a "$LOG_FILE"
-PATCH_PRIVATE_SHARE "$WORK_DIR/services" 2>&1 | tee -a "$LOG_FILE"
-DISABLE_SIGNATURE_VERIFICATION "$WORK_DIR/services" 2>&1 | tee -a "$LOG_FILE"
+CUSTOM_PLATFORM_SIGNATURE "$WORK_DIR/services" "$(GET_ACTIVE_CERT_HEX)" 2>&1 | tee -a "$LOG_FILE"
+PATCH_SECSETTINGS "$WORK_DIR/SecSettings" 2>&1 | tee -a "$LOG_FILE"
 
 log_section "Recompiling Knox and Framework"
 RECOMPILE "$APKTOOL" "$WORK_DIR/ssrm" "FIRMWARE/system/system/framework" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
 RECOMPILE "$APKTOOL" "$WORK_DIR/services" "FIRMWARE/system/system/framework" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
+REBUILD_AND_SIGN_APK "$APKTOOL" "$WORK_DIR/SecSettings" "$HOME/.local/share/apktool/framework" "$WORK_DIR/SecSettings_rebuilt.apk" 2>&1 | tee -a "$LOG_FILE" &
 wait
 cp -fv "$WORK_DIR"/*.jar "FIRMWARE/system/system/framework/" 2>&1 | tee -a "$LOG_FILE"
+if [ -f "$WORK_DIR/SecSettings_rebuilt.apk" ]; then
+    cp -fv "$WORK_DIR/SecSettings_rebuilt.apk" "FIRMWARE/system/system/priv-app/SecSettings/SecSettings.apk" 2>&1 | tee -a "$LOG_FILE"
+fi
 
 log_section "Building ROM"
 source scripts/features/LumiROM.sh 2>&1 | tee -a "$LOG_FILE"
