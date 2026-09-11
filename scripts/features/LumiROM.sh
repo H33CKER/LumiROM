@@ -1014,9 +1014,11 @@ APPLY_PROP_FEATURES() {
     BUILD_PROP "$EXTRACTED_FIRM_DIR" "ro.product.locale" "en-US"
     BUILD_PROP "$EXTRACTED_FIRM_DIR" "wifi.interface" "wlan0"
     BUILD_PROP "$EXTRACTED_FIRM_DIR" "wlan.wfd.hdcp" "disabled"
-    BUILD_PROP "$EXTRACTED_FIRM_DIR" "debug.hwui.renderer" "skiavk"
+    BUILD_PROP "$EXTRACTED_FIRM_DIR" "debug.hwui.renderer" "opengl"
+    BUILD_PROP "$EXTRACTED_FIRM_DIR" "debug.hwui.skia_atrace_enabled" "false"
+    BUILD_PROP "$EXTRACTED_FIRM_DIR" "debug.renderengine.backend" "skiaglthreaded"
 	BUILD_PROP "$EXTRACTED_FIRM_DIR" "ro.telephony.sim_slots.count" "2"
-    BUILD_PROP "$EXTRACTED_FIRM_DIR" "ro.surface_flinger.protected_contents" "true"
+    BUILD_PROP "$EXTRACTED_FIRM_DIR" "ro.surface_flinger.protected_contents" "false"
     BUILD_PROP "$EXTRACTED_FIRM_DIR" "persist.audio.voip.enabled" "true"
     BUILD_PROP "$EXTRACTED_FIRM_DIR" "persist.vendor.audio.voip" "true"
     BUILD_PROP "$EXTRACTED_FIRM_DIR" "persist.audio.recording.voip" "true"
@@ -1124,8 +1126,14 @@ APPLY_PROP_FEATURES() {
         BUILD_PROP "$EXTRACTED_FIRM_DIR" "ro.cloudy.rom.ver.code" "$LUMIROM_CODE"
         BUILD_PROP "$EXTRACTED_FIRM_DIR" "ro.cloudy.maintainer" "$LUMIROM_MAINTAINER"
     fi
-    
 
+    # The vendor build.prop overrides the system one at boot, so patch it here
+    # to ensure the threaded Skia renderengine backend is actually used.
+    local VENDOR_BUILD_PROP="$EXTRACTED_FIRM_DIR/vendor/build.prop"
+    if [ -f "$VENDOR_BUILD_PROP" ]; then
+        sudo sed -i 's|^debug.renderengine.backend=.*|debug.renderengine.backend=skiaglthreaded|' "$VENDOR_BUILD_PROP"
+        echo "${GREEN}Patched ${RESET}vendor/build.prop debug.renderengine.backend => skiaglthreaded${RESET}"
+    fi
 }
 
 APPEND_DISPLAY_ID() {
