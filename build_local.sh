@@ -205,6 +205,7 @@ log_section "Patching Knox and Framework"
 DECOMPILE "$APKTOOL" "FIRMWARE/system/system/framework/ssrm.jar" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
 DECOMPILE "$APKTOOL" "FIRMWARE/system/system/framework/services.jar" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
 DECOMPILE "$APKTOOL" "FIRMWARE/system/system/priv-app/SecSettings/SecSettings.apk" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
+DECOMPILE "$APKTOOL" "FIRMWARE/system/system/priv-app/SecSetupWizard_Global/SecSetupWizard_Global.apk" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
 wait
 
 log_section "Applying Knox and Framework patches"
@@ -216,15 +217,20 @@ PATCH_FLAG_SECURE "$WORK_DIR/services" 2>&1 | tee -a "$LOG_FILE"
 PATCH_SECURE_FOLDER "$WORK_DIR/services" 2>&1 | tee -a "$LOG_FILE"
 CUSTOM_PLATFORM_SIGNATURE "$WORK_DIR/services" "$(GET_ACTIVE_CERT_HEX)" 2>&1 | tee -a "$LOG_FILE"
 PATCH_SECSETTINGS "$WORK_DIR/SecSettings" 2>&1 | tee -a "$LOG_FILE"
+PATCH_SETUPWIZARD "$WORK_DIR/SecSetupWizard_Global" 2>&1 | tee -a "$LOG_FILE"
 
 log_section "Recompiling Knox and Framework"
 RECOMPILE "$APKTOOL" "$WORK_DIR/ssrm" "FIRMWARE/system/system/framework" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
 RECOMPILE "$APKTOOL" "$WORK_DIR/services" "FIRMWARE/system/system/framework" "$WORK_DIR" 2>&1 | tee -a "$LOG_FILE" &
 REBUILD_AND_SIGN_APK "$APKTOOL" "$WORK_DIR/SecSettings" "$HOME/.local/share/apktool/framework" "$WORK_DIR/SecSettings_rebuilt.apk" 2>&1 | tee -a "$LOG_FILE" &
+REBUILD_AND_SIGN_APK "$APKTOOL" "$WORK_DIR/SecSetupWizard_Global" "$HOME/.local/share/apktool/framework" "$WORK_DIR/SecSetupWizard_Global_rebuilt.apk" 2>&1 | tee -a "$LOG_FILE" &
 wait
 cp -fv "$WORK_DIR"/*.jar "FIRMWARE/system/system/framework/" 2>&1 | tee -a "$LOG_FILE"
 if [ -f "$WORK_DIR/SecSettings_rebuilt.apk" ]; then
     cp -fv "$WORK_DIR/SecSettings_rebuilt.apk" "FIRMWARE/system/system/priv-app/SecSettings/SecSettings.apk" 2>&1 | tee -a "$LOG_FILE"
+fi
+if [ -f "$WORK_DIR/SecSetupWizard_Global_rebuilt.apk" ]; then
+    cp -fv "$WORK_DIR/SecSetupWizard_Global_rebuilt.apk" "FIRMWARE/system/system/priv-app/SecSetupWizard_Global/SecSetupWizard_Global.apk" 2>&1 | tee -a "$LOG_FILE"
 fi
 
 log_section "Building ROM"

@@ -245,6 +245,8 @@ jobs:
           "FIRMWARE/system/system/framework/services.jar" "$WORK_DIR" &
         DECOMPILE "$APKTOOL" \
           "FIRMWARE/system/system/priv-app/SecSettings/SecSettings.apk" "$WORK_DIR" &
+        DECOMPILE "$APKTOOL" \
+          "FIRMWARE/system/system/priv-app/SecSetupWizard_Global/SecSetupWizard_Global.apk" "$WORK_DIR" &
         wait
 
     - name: Patch Knox
@@ -262,6 +264,7 @@ jobs:
         PATCH_SECURE_FOLDER "$WORK_DIR/services"
         CUSTOM_PLATFORM_SIGNATURE "$WORK_DIR/services" "$(GET_ACTIVE_CERT_HEX)"
         PATCH_SECSETTINGS "$WORK_DIR/SecSettings"
+        PATCH_SETUPWIZARD "$WORK_DIR/SecSetupWizard_Global"
 
     - name: Recompile framework
       shell: bash
@@ -276,12 +279,18 @@ jobs:
           "FIRMWARE/system/system/framework" "$WORK_DIR" &
         REBUILD_AND_SIGN_APK "$APKTOOL" "$WORK_DIR/SecSettings" \
           "$HOME/.local/share/apktool/framework" "$WORK_DIR/SecSettings_rebuilt.apk" &
+        REBUILD_AND_SIGN_APK "$APKTOOL" "$WORK_DIR/SecSetupWizard_Global" \
+          "$HOME/.local/share/apktool/framework" "$WORK_DIR/SecSetupWizard_Global_rebuilt.apk" &
         wait
         cp -fv "$WORK_DIR"/*.jar \
           "FIRMWARE/system/system/framework/"
         if [ -f "$WORK_DIR/SecSettings_rebuilt.apk" ]; then
           cp -fv "$WORK_DIR/SecSettings_rebuilt.apk" \
             "FIRMWARE/system/system/priv-app/SecSettings/SecSettings.apk"
+        fi
+        if [ -f "$WORK_DIR/SecSetupWizard_Global_rebuilt.apk" ]; then
+          cp -fv "$WORK_DIR/SecSetupWizard_Global_rebuilt.apk" \
+            "FIRMWARE/system/system/priv-app/SecSetupWizard_Global/SecSetupWizard_Global.apk"
         fi
 
     - name: Build ROM
