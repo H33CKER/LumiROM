@@ -63,7 +63,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-      
+
+    outputs:
+      device_codename: ${{ steps.manifests.outputs.device_codename }}
+      lumirom_version: ${{ steps.manifests.outputs.lumirom_version }}
+
     steps:
 
     - name: Checkout repository
@@ -350,7 +354,7 @@ jobs:
         TARGET_NAME="LumiROM_TARGET_${LUMIROM_VERSION}_${STOCK_DEVICE}.zip"
         CREATE_TARGET_FILES "$PWD/$TARGET_NAME"
         if [ -n "$HF_TOKEN" ] && [ -n "$HF_USER" ]; then
-          python3 scripts/package/upload_hf.py "$PWD/$TARGET_NAME" "target-files/$LUMIROM_VERSION/$STOCK_DEVICE/$TARGET_NAME"
+          python3 scripts/package/upload_hf.py "$PWD/$TARGET_NAME" "$LUMIROM_VERSION/$STOCK_DEVICE/$TARGET_NAME" --bucket "${HF_USER}/target-files"
         else
           echo "HF credentials not set, target files saved locally only."
         fi
@@ -358,7 +362,7 @@ jobs:
     - name: Download previous target files
       if: ${{ github.event.inputs.INCREMENTAL_FROM != '' }}
       run: |
-        URL="https://huggingface.co/buckets/${{ vars.HF_USER }}/LumiROM/resolve/target-files/${{ github.event.inputs.INCREMENTAL_FROM }}/${{ env.STOCK_DEVICE }}/LumiROM_TARGET_${{ github.event.inputs.INCREMENTAL_FROM }}_${{ env.STOCK_DEVICE }}.zip?download=true"
+        URL="https://huggingface.co/buckets/${{ vars.HF_USER }}/target-files/resolve/${{ github.event.inputs.INCREMENTAL_FROM }}/${{ env.STOCK_DEVICE }}/LumiROM_TARGET_${{ github.event.inputs.INCREMENTAL_FROM }}_${{ env.STOCK_DEVICE }}.zip?download=true"
         if curl -sfL -o prev-target-files.zip "$URL"; then
           echo "Previous target files downloaded."
         else
@@ -380,50 +384,102 @@ jobs:
       run: |
         bash scripts/package/upload.sh "$DESTINATION"
 
-    - name: Update OTA manifest
+    - name: Generate OTA manifests
+      id: manifests
+      if: ${{ github.event.inputs.ZIP_IMG != 'true' }}
       env:
-        CLOUDY_TOKEN: ${{ secrets.CLOUDY_TOKEN }}
         OTA_CHANGELOG: ${{ github.event.inputs.OTA_CHANGELOG }}
-        HF_USER: ${{ vars.HF_USER }}
       run: |
-        if [ -z "$CLOUDY_TOKEN" ]; then
-          echo "CLOUDY_TOKEN not set, skipping OTA manifest update."
-          exit 0
-        fi
-        if [ "$ZIP_IMG" = "true" ]; then
-          echo "IMG mode, skipping OTA manifest update."
-          exit 0
-        fi
+        echo "device_codename=${DEVICE_CODENAME}" >> "$GITHUB_OUTPUT"
+        echo "lumirom_version=${LUMIROM_VERSION}" >> "$GITHUB_OUTPUT"
+
         ZIP_PATH=$(find ./ROM/"$FOLDER_NAME" -type f -name "*.zip" ! -name "*INCREMENTAL*" | head -n 1)
         if [ -z "$ZIP_PATH" ]; then
-          echo "No ROM zip found, skipping OTA manifest update."
+          echo "No ROM zip found, skipping OTA manifest generation."
+          mkdir -p OTA_MANIFESTS
           exit 0
         fi
         if [ -z "$DOWNLOAD_URL" ]; then
-          echo "No download URL available, skipping OTA manifest update."
+          echo "No download URL available, skipping OTA manifest generation."
+          mkdir -p OTA_MANIFESTS
           exit 0
         fi
+
+        source scripts/package/generate_ota_manifest.sh
+        mkdir -p OTA_MANIFESTS
+
+        # Full-ROM manifest (updater/{device}.json) - keeps release history.
+        CURRENT_JSON="/tmp/ota_current.json"
+        curl -sf -o "$CURRENT_JSON" "https://raw.githubusercontent.com/Luminous418/cloudy/main/updater/${DEVICE_CODENAME}.json" || CURRENT_JSON=""
+        GENERATE_OTA_MANIFEST "$ZIP_PATH" "$DOWNLOAD_URL" "$OTA_CHANGELOG" "$CURRENT_JSON" > OTA_MANIFESTS/updater.json
+        echo "Full-ROM manifest generated."
+
+        # OTA-only manifest (updater/ota/{device}.json) - only when an incremental exists.
         INCREMENTAL_ZIP=""
         INC_URL=""
         if [ -n "$DOWNLOAD_URL_INCREMENTAL" ]; then
           INCREMENTAL_ZIP=$(find ./ROM/"$FOLDER_NAME" -type f -name "*INCREMENTAL*.zip" | head -n 1)
           INC_URL="$DOWNLOAD_URL_INCREMENTAL"
         fi
-        CURRENT_JSON="/tmp/ota_current.json"
-        curl -sf -o "$CURRENT_JSON" "https://raw.githubusercontent.com/Luminous418/cloudy/main/updater/${DEVICE_CODENAME}.json" || CURRENT_JSON=""
-        source scripts/package/generate_ota_manifest.sh
-        GENERATE_OTA_MANIFEST "$ZIP_PATH" "$DOWNLOAD_URL" "$OTA_CHANGELOG" "$CURRENT_JSON" "$INCREMENTAL_ZIP" "$INC_URL" > /tmp/ota_new.json
-        git clone --depth 1 "https://x-access-token:${CLOUDY_TOKEN}@github.com/Luminous418/cloudy.git" /tmp/cloudy
-        mkdir -p /tmp/cloudy/updater
-        cp /tmp/ota_new.json "/tmp/cloudy/updater/${DEVICE_CODENAME}.json"
-        cd /tmp/cloudy
-        git config user.name "LumiROM Bot"
-        git config user.email "noreply@github.com"
-        git add "updater/${DEVICE_CODENAME}.json"
-        git diff --cached --quiet && echo "Manifest unchanged, nothing to push." && exit 0
-        git commit -m "OTA: ${LUMIROM_VERSION} for ${DEVICE_CODENAME}"
-        git push
+        if [ -n "$INCREMENTAL_ZIP" ] && [ -f "$INCREMENTAL_ZIP" ]; then
+          GENERATE_OTA_INCREMENTAL_MANIFEST "$INCREMENTAL_ZIP" "$INC_URL" "$OTA_CHANGELOG" > OTA_MANIFESTS/ota.json
+          echo "OTA-only manifest generated."
+        else
+          echo "No incremental OTA found, skipping OTA-only manifest."
+        fi
+
+    - name: Upload OTA manifests
+      if: ${{ github.event.inputs.ZIP_IMG != 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ota-manifests
+        path: OTA_MANIFESTS/
+        retention-days: 1
 
     - name: Cleanup
       run: |
         sudo rm -rf *
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: ${{ github.event.inputs.ZIP_IMG != 'true' }}
+
+    steps:
+    - name: Download OTA manifests
+      uses: actions/download-artifact@v4
+      with:
+        name: ota-manifests
+        path: OTA_MANIFESTS/
+
+    - name: Update OTA manifests in cloudy repo
+      env:
+        CLOUDY_TOKEN: ${{ secrets.CLOUDY_TOKEN }}
+      run: |
+        if [ -z "$CLOUDY_TOKEN" ]; then
+          echo "CLOUDY_TOKEN not set, skipping OTA manifest update."
+          exit 0
+        fi
+        if [ ! -f OTA_MANIFESTS/updater.json ]; then
+          echo "No ROM manifest generated, skipping OTA manifest update."
+          exit 0
+        fi
+
+        DEVICE_CODENAME="${{ needs.build.outputs.device_codename }}"
+        LUMIROM_VERSION="${{ needs.build.outputs.lumirom_version }}"
+
+        git clone --depth 1 "https://x-access-token:${CLOUDY_TOKEN}@github.com/Luminous418/cloudy.git" /tmp/cloudy
+        mkdir -p /tmp/cloudy/updater/ota
+        cp OTA_MANIFESTS/updater.json "/tmp/cloudy/updater/${DEVICE_CODENAME}.json"
+        if [ -f OTA_MANIFESTS/ota.json ]; then
+          cp OTA_MANIFESTS/ota.json "/tmp/cloudy/updater/ota/${DEVICE_CODENAME}.json"
+        else
+          echo "No OTA-only manifest to update, keeping previous one."
+        fi
+        cd /tmp/cloudy
+        git config user.name "LumiROM Bot"
+        git config user.email "noreply@github.com"
+        git add "updater/${DEVICE_CODENAME}.json" "updater/ota/${DEVICE_CODENAME}.json"
+        git diff --cached --quiet && echo "Manifest unchanged, nothing to push." && exit 0
+        git commit -m "OTA: ${LUMIROM_VERSION} for ${DEVICE_CODENAME}"
+        git push

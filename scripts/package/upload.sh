@@ -33,19 +33,30 @@ GOFILE_UPLOAD() {
 UPLOAD_FILE() {
     local FILE="$1"
     local URL_VAR="$2"
+    local FILE_NAME
+    local BUCKET
+    local REMOTE_PATH
+
+    FILE_NAME=$(basename "$FILE")
 
     case "$DESTINY" in
         huggingface)
-            echo "Uploading $(basename "$FILE") to Hugging Face"
-            local REMOTE_PATH="ROMs/$LUMIROM_VERSION/$STOCK_DEVICE/$(basename "$FILE")"
-            python3 "$(dirname "$0")/upload_hf.py" "$FILE" "$REMOTE_PATH"
+            if [[ "$FILE_NAME" == *"INCREMENTAL"* ]]; then
+                BUCKET="${HF_USER}/OTAs"
+                REMOTE_PATH="$LUMIROM_VERSION/$STOCK_DEVICE/$FILE_NAME"
+            else
+                BUCKET="${HF_USER}/LumiROM"
+                REMOTE_PATH="ROMs/$LUMIROM_VERSION/$STOCK_DEVICE/$FILE_NAME"
+            fi
+            echo "Uploading $FILE_NAME to Hugging Face bucket $BUCKET"
+            python3 "$(dirname "$0")/upload_hf.py" "$FILE" "$REMOTE_PATH" --bucket "$BUCKET"
             if [ -n "$GITHUB_ENV" ] && [ -n "$HF_USER" ]; then
-                echo "${URL_VAR}=https://huggingface.co/buckets/${HF_USER}/LumiROM/resolve/${REMOTE_PATH}?download=true" >> "$GITHUB_ENV"
+                echo "${URL_VAR}=https://huggingface.co/buckets/${BUCKET}/resolve/${REMOTE_PATH}?download=true" >> "$GITHUB_ENV"
             fi
             ;;
 
         gofile)
-            echo "Uploading $(basename "$FILE") to GoFile"
+            echo "Uploading $FILE_NAME to GoFile"
             GOFILE_UPLOAD "$FILE" "$URL_VAR"
             ;;
 
