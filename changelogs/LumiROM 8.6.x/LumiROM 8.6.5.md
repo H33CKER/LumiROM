@@ -2,6 +2,7 @@
 
 ## Fixes
 - Fixed black recents preview by switching to the OpenGL renderer.
+- Fixed app crashing due to vulkan.
 
 ## Features
 - Added a full OTA update system with manifest and incremental support, so updates can be generated as small patches of the previous version.
@@ -10,14 +11,12 @@
 - Added software update onto settings that opens Cloudy.
 - Added LumiROM logo to About software.
 - Updated Cloudy to `2.4`.
-- Updated debloat list.
 
 ## More
 - [Repo] OTA builds: incremental target files in TARGET_FILES, OTA signing with LumiROM keys, official builds now detected by platform certificate (no more firmware-hash hacks).
 - [Repo] CUSTOM_PLATFORM_SIGNATURE replaces the no-op DISABLE_SIGNATURE_VERIFICATION.
 - [Repo] build_local.sh mirrors CI: SecSettings and SetupWizard are now decompiled, patched, rebuilt and resigned locally too.
-- [Repo] Refactoring: FW build functions moved to FW.sh, app patches grouped in AppPatches.sh, and the SetupWizard mod now uses static patches (scripts/patches/0004-0006).
-- [Repo] Incremental OTA improvements: skip unchanged boot.img, empty range handling, animated progress and bsdiff support.
+- [Repo] Refactoring: FW build functions moved to FW.sh, app patches grouped in AppPatches.sh.
 
 Next update will try to bring more fixes. Until then, enjoy the update!
 
