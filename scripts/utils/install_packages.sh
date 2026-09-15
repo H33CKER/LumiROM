@@ -24,6 +24,7 @@ UBUNTU_PACKAGES() {
         unzip
         tar
         lz4
+        secilc
         tree
         git
         gnupg
