@@ -59,6 +59,11 @@ on:
         required: false
         default: ""
         type: string
+      TEST_BUILD:
+        description: "Test build: skip incremental/target-files/OTA manifests and release"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build:
@@ -137,8 +142,9 @@ jobs:
         OTA_PK8: ${{ secrets.OTA_PK8 }}
         OTA_CERT: ${{ secrets.OTA_CERT }}
         CLOUDY_TOKEN: ${{ secrets.CLOUDY_TOKEN }}
+        TEST_BUILD: ${{ github.event.inputs.TEST_BUILD }}
       run: |
-        if [ -n "$OTA_PK8" ] && [ -n "$OTA_CERT" ] && [ -n "$CLOUDY_TOKEN" ]; then
+        if [ -n "$OTA_PK8" ] && [ -n "$OTA_CERT" ] && [ -n "$CLOUDY_TOKEN" ] && [ "$TEST_BUILD" != "true" ]; then
           echo "can_ota=true" >> "$GITHUB_OUTPUT"
         else
           echo "can_ota=false" >> "$GITHUB_OUTPUT"
