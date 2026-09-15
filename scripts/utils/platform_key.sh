@@ -58,7 +58,9 @@ GET_ACTIVE_KEY_FILES() {
     elif [ -f "$HOME/.lumi/keys/platform.pk8" ] && [ -f "$HOME/.lumi/keys/platform.x509.pem" ]; then
         KEY_DIR="$HOME/.lumi/keys"
     else
-        KEY_DIR="$(pwd)/scripts/keys"
+        KEY_DIR="$(mktemp -d)"
+        cp "$(pwd)/scripts/keys/testkey.pk8" "$KEY_DIR/platform.pk8"
+        cp "$(pwd)/scripts/keys/testkey.x509.pem" "$KEY_DIR/platform.x509.pem"
     fi
 
     echo "$KEY_DIR"
