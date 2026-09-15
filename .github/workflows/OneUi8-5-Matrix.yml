@@ -52,6 +52,9 @@ jobs:
       fail-fast: false 
       matrix:
         device: [SM-A325F, SM-A325M, SM-M325F, SM-A225F, SM-E225F, SM-A226B]
+
+    outputs:
+      can_ota: ${{ steps.ota-cap.outputs.can_ota }}
       
     steps:
 
@@ -110,6 +113,20 @@ jobs:
         echo "APKTOOL=$PWD/bin/apktool/apktool.jar" >> $GITHUB_ENV
         echo "VNDKS_COLLECTION=$PWD/LumiROM/vndks" >> $GITHUB_ENV
         echo "BUILD_PARTITIONS=product,vendor,odm,system_ext,system" >> $GITHUB_ENV
+
+    - name: Detect official OTA capabilities
+      id: ota-cap
+      shell: bash
+      env:
+        OTA_PK8: ${{ secrets.OTA_PK8 }}
+        OTA_CERT: ${{ secrets.OTA_CERT }}
+        CLOUDY_TOKEN: ${{ secrets.CLOUDY_TOKEN }}
+      run: |
+        if [ -n "$OTA_PK8" ] && [ -n "$OTA_CERT" ] && [ -n "$CLOUDY_TOKEN" ]; then
+          echo "can_ota=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "can_ota=false" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Check repo
       shell: bash
@@ -335,7 +352,7 @@ jobs:
         IMG_ZIP_CREATION "$OUT_DIR"
 
     - name: Save target files
-      if: ${{ github.event.inputs.ZIP_IMG != 'true' && github.event.inputs.TARGET_FILES == 'true' }}
+      if: ${{ github.event.inputs.ZIP_IMG != 'true' && github.event.inputs.TARGET_FILES == 'true' && steps.ota-cap.outputs.can_ota == 'true' }}
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
         HF_USER: ${{ vars.HF_USER }}
@@ -350,7 +367,7 @@ jobs:
         fi
 
     - name: Download previous target files
-      if: ${{ github.event.inputs.INCREMENTAL_FROM != '' }}
+      if: ${{ github.event.inputs.INCREMENTAL_FROM != '' && steps.ota-cap.outputs.can_ota == 'true' }}
       run: |
         URL="https://huggingface.co/buckets/${{ vars.HF_USER }}/target-files/resolve/${{ github.event.inputs.INCREMENTAL_FROM }}/${{ matrix.device }}/LumiROM_TARGET_${{ github.event.inputs.INCREMENTAL_FROM }}_${{ matrix.device }}.zip?download=true"
         if curl -sfL -o prev-target-files.zip "$URL"; then
@@ -361,7 +378,7 @@ jobs:
         fi
 
     - name: Build incremental OTA
-      if: ${{ github.event.inputs.INCREMENTAL_FROM != '' && env.INCREMENTAL_SOURCE_AVAILABLE != 'false' }}
+      if: ${{ github.event.inputs.INCREMENTAL_FROM != '' && env.INCREMENTAL_SOURCE_AVAILABLE != 'false' && steps.ota-cap.outputs.can_ota == 'true' }}
       run: |
         source scripts/package/build_incremental_ota.sh
         BUILD_INCREMENTAL_OTA "$PWD/prev-target-files.zip" "$OUT_DIR"
@@ -375,7 +392,7 @@ jobs:
         bash scripts/package/upload.sh "$DESTINATION"
 
     - name: Generate OTA manifests
-      if: ${{ github.event.inputs.ZIP_IMG != 'true' }}
+      if: ${{ github.event.inputs.ZIP_IMG != 'true' && steps.ota-cap.outputs.can_ota == 'true' }}
       env:
         OTA_CHANGELOG: ${{ github.event.inputs.OTA_CHANGELOG }}
       run: |
@@ -415,7 +432,7 @@ jobs:
         fi
 
     - name: Upload OTA manifests
-      if: ${{ github.event.inputs.ZIP_IMG != 'true' }}
+      if: ${{ github.event.inputs.ZIP_IMG != 'true' && steps.ota-cap.outputs.can_ota == 'true' }}
       uses: actions/upload-artifact@v4
       with:
         name: ota-manifests-${{ matrix.device }}
@@ -429,7 +446,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: build
-    if: ${{ github.event.inputs.ZIP_IMG != 'true' }}
+    if: ${{ github.event.inputs.ZIP_IMG != 'true' && needs.build.outputs.can_ota == 'true' }}
 
     steps:
     - name: Download OTA manifests
