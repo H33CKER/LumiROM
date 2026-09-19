@@ -240,6 +240,8 @@ apply_rom_features() {
     run APPLY_STOCK_CONFIG "$FIRM_DIR"
     run DEBLOAT "$FIRM_DIR"
     run APPLY_PROP_FEATURES "$FIRM_DIR"
+    source scripts/features/HotspotFix.sh
+    run ADD_SOFTAP_FIX "$FIRM_DIR"
 }
 
 add_mods() {
