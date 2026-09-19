@@ -160,7 +160,7 @@ ADD_SOFTAP_FIX() {
     # ------------------------------------------------------------
     # 4. rezip original_apex with the modified payload
     # ------------------------------------------------------------
-    ( cd "$SOFTAP_DIR/apexzip" && rm -f ../pit/original_apex ../pit/original_apex.zip && zip -q -r -X ../pit/original_apex.zip . && mv ../pit/original_apex.zip ../pit/original_apex )
+    ( cd "$SOFTAP_DIR/apexzip" && rm -f ../pit/original_apex ../pit/original_apex.zip && zip -q -r -0 -X ../pit/original_apex.zip . && mv ../pit/original_apex.zip ../pit/original_apex )
     [ -f "$SOFTAP_DIR/pit/original_apex" ] || {
         echo "${RED} - failed to repack original_apex${RESET}"
         return 1
