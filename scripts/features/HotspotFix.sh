@@ -1,5 +1,8 @@
 #!/bin/bash
 source scripts/utils/bash_colors.sh
+export AVBTOOL_BIN="${AVBTOOL:-$PWD/bin/avb/avbtool}"
+export APEX_WIFI_FIX_KEY="$PWD/scripts/keys/apex-wifi-fix.pem"
+export APEX_WIFI_FIX_PUB="$PWD/scripts/keys/apex-wifi-fix.avbpubkey"
 
 # =====================================================================
 #  Hotspot teardown fix, baked into the com.android.wifi apex.
@@ -14,24 +17,21 @@ source scripts/utils/bash_colors.sh
 #  sent and the hotspot tile stays on "turning off".
 #
 #  Fix: patch WifiNative inside the service-wifi.jar that lives in the
-#  com.android.wifi apex and rewrite the apex *in the ROM itself*
-#  (capex repack, done here at build time). No bind-mount, no SELinux
-#  service, no Magisk, no post-fs-data hooks. The apexd digest inside
-#  the capex (originalApexFileDigest) is recomputed so apexd
-#  re-decompresses and activates our modified apex normally. This also
-#  survives bootloader-unlocked (verifiedbootstate=orange) devices
-#  where the apex payload is mounted without merkle enforcement.
+#  com.android.wifi apex, then rewrite the apex *in the ROM itself*
+#  (capex repack at build time). No bind-mounts, no SELinux service, no
+#  Magisk, no post-fs-data hooks — the patch is baked into the apex
+#  payload image itself. Because apexd compares the payload's embedded
+#  AVB hashtree root digest with the one inside the capex's
+#  apex_manifest.pb (originalApexDigest), we regenerate the dm-verity
+#  hash tree with avbtool (LumiROM's own apex key) and update both the
+#  apex digest and its apex_pubkey to keep apexd's verification happy.
 # =====================================================================
 
-# ---------------------------------------------------------------
-# Build the patched service-wifi.jar (smali edit via softap_fix.py)
-# ---------------------------------------------------------------
 HotspotFix_BUILD_PATCHED_JAR() {
     if [ "$#" -ne 3 ]; then
         echo "Usage: ${FUNCNAME[0]} <WORK_DIR_SOFTAP> <APKTOOL_JAR> <SRC_JAR>"
         return 1
     fi
-
     local SOFTAP_DIR="$1"
     local APKTOOL_JAR="$2"
     local SRC_JAR="$3"
@@ -64,14 +64,87 @@ HotspotFix_BUILD_PATCHED_JAR() {
 }
 
 # ---------------------------------------------------------------
-# Swap the service-wifi.jar inside a dm-verity payload image
+# Extract the raw ext4 region from a payload with an existing AVB footer
+# ---------------------------------------------------------------
+HotspotFix_STRIP_AVB_FOOTER() {
+    if [ "$#" -ne 2 ]; then
+        echo "Usage: ${FUNCNAME[0]} <APEX_PAYLOAD_IMG> <OUTPUT_RAW_IMG>"
+        return 1
+    fi
+    local SRC="$1"
+    local OUT="$2"
+    local FS_BYTES
+    FS_BYTES=$("${AVBTOOL_BIN:-$PWD/bin/avb/avbtool}" info_image --image "$SRC" 2>/dev/null | awk '/Original image size:/ {print $4}')
+    if [ -z "$FS_BYTES" ]; then
+        echo "${RED} - failed to read the ext4 size from payload${RESET}"
+        return 1
+    fi
+    dd if="$SRC" of="$OUT" bs="$FS_BYTES" count=1 status=none
+    return 0
+}
+
+# ---------------------------------------------------------------
+# Rebuild the dm-verity hashtree + vbmeta of the patched payload
+# ---------------------------------------------------------------
+HotspotFix_SIGN_PAYLOAD() {
+    if [ "$#" -ne 2 ]; then
+        echo "Usage: ${FUNCNAME[0]} <RAW_FS_IMG> <NEW_PAYLOAD_IMG>"
+        return 1
+    fi
+    local RAW="$1"
+    local OUT="$2"
+    mkdir -p "$(dirname "$OUT")"
+
+    local FS_BYTES
+    FS_BYTES=$(stat -c%s "$RAW")
+
+    local SALT
+    SALT=$("${AVBTOOL_BIN:-$PWD/bin/avb/avbtool}" info_image --image "$APEX_WIFI_PREVIOUS_PAYLOAD" 2>/dev/null | awk '/Salt:/ {print $2}')
+    if [ -z "$SALT" ]; then
+        SALT="2be4f352b93bda691f7e4a725dd39e328148bd3ce46838ad5e0e81db16eb56fa"
+    fi
+
+    # avbtool appends the hashtree + vbmeta and pads up to partition_size; a
+    # ~100 KiB hashtree needs a little headroom over the raw ext4 size.
+    local PART_SIZE=$((FS_BYTES + FS_BYTES / 64 + 262144))
+    PART_SIZE=$(((PART_SIZE + 4095) / 4096 * 4096))
+
+    "${AVBTOOL_BIN:-$PWD/bin/avb/avbtool}" add_hashtree_footer \
+        --image "$RAW" \
+        --partition_size "$PART_SIZE" \
+        --partition_name "" \
+        --hash_algorithm sha256 \
+        --salt "$SALT" \
+        --key "$APEX_WIFI_FIX_KEY" \
+        --algorithm SHA256_RSA4096 \
+        --prop apex.key:com.android.wifi \
+        --do_not_generate_fec || {
+        echo "${RED} - avbtool add_hashtree_footer failed${RESET}"
+        return 1
+    }
+    mv -f "$RAW" "$OUT"
+    return 0
+}
+
+# ---------------------------------------------------------------
+# Extract the new payload root digest
+# ---------------------------------------------------------------
+HotspotFix_GET_ROOT_DIGEST() {
+    if [ "$#" -ne 1 ]; then
+        echo "Usage: ${FUNCNAME[0]} <APEX_PAYLOAD_IMG>"
+        return 1
+    fi
+    "${AVBTOOL_BIN:-$PWD/bin/avb/avbtool}" info_image --image "$1" 2>/dev/null | awk '/Root Digest:/ {print $3}'
+}
+
+# ---------------------------------------------------------------
+# Replace the service-wifi.jar inside the ext4 payload
 # ---------------------------------------------------------------
 HotspotFix_PATCH_PAYLOAD() {
     if [ "$#" -ne 2 ]; then
         echo "Usage: ${FUNCNAME[0]} <PAYLOAD_IMG> <PATCHED_JAR>"
         return 1
     fi
-
     local PAYLOAD_IMG="$1"
     local PATCHED_JAR="$2"
 
@@ -87,6 +160,7 @@ HotspotFix_PATCH_PAYLOAD() {
     echo "${GREEN} - payload patched${RESET}"
     return 0
 }
+
 ADD_SOFTAP_FIX() {
     echo ""
     if [ "$#" -ne 1 ]; then
@@ -98,7 +172,6 @@ ADD_SOFTAP_FIX() {
 
     echo "${YELLOW}Patching Hotspot...${RESET}"
 
-    # Locate the wifi apex that shipped with the base firmware.
     local CAPEX=""
     local cand
     for cand in \
@@ -120,83 +193,73 @@ ADD_SOFTAP_FIX() {
     rm -rf "$SOFTAP_DIR"
     mkdir -p "$SOFTAP_DIR/pit" "$SOFTAP_DIR/patched" "$SOFTAP_DIR/apexzip"
 
-    # ------------------------------------------------------------
-    # 1. unpack the capex (a plain zip container around original_apex)
-    # ------------------------------------------------------------
-    cp -f "$CAPEX" "$SOFTAP_DIR/original.capex"
-    unzip -qq "$SOFTAP_DIR/original.capex" -d "$SOFTAP_DIR/pit" || {
+    {
+        cp -f "$CAPEX" "$SOFTAP_DIR/pit/original.capex"
+        unzip -qq "$SOFTAP_DIR/pit/original.capex" -d "$SOFTAP_DIR/pit" &&
+        unzip -qq "$SOFTAP_DIR/pit/original_apex" -d "$SOFTAP_DIR/apexzip"
+    } >/dev/null 2>&1 || {
         echo "${RED} - failed to unzip capex${RESET}"
         return 1
     }
 
-    # ------------------------------------------------------------
-    # 2. unpack original_apex (contains apex_payload.img) and build
-    #    the patched service-wifi.jar
-    # ------------------------------------------------------------
-    unzip -qq "$SOFTAP_DIR/pit/original_apex" -d "$SOFTAP_DIR/apexzip" || {
-        echo "${RED} - failed to unzip original apex${RESET}"
-        return 1
-    }
-
-    if [ ! -f "$SOFTAP_DIR/apexzip/apex_payload.img" ]; then
+    local PAYLOAD="$SOFTAP_DIR/apexzip/apex_payload.img"
+    if [ ! -f "$PAYLOAD" ]; then
         echo "${RED} - apex_payload.img missing${RESET}"
         return 1
     fi
 
+    export APEX_WIFI_PREVIOUS_PAYLOAD="$PAYLOAD"
+
     debugfs -R "dump /javalib/service-wifi.jar $SOFTAP_DIR/patched/service-wifi.jar" \
-        "$SOFTAP_DIR/apexzip/apex_payload.img" >/dev/null 2>&1
+        "$PAYLOAD" >/dev/null 2>&1
 
     HotspotFix_BUILD_PATCHED_JAR "$SOFTAP_DIR" "$APKTOOL" "$SOFTAP_DIR/patched/service-wifi.jar" || {
         echo "${RED} - SoftAp teardown patch aborted${RESET}"
         return 1
     }
 
-    # ------------------------------------------------------------
-    # 3. inject the patched jar into the apex_payload.img
-    # ------------------------------------------------------------
-    HotspotFix_PATCH_PAYLOAD "$SOFTAP_DIR/apexzip/apex_payload.img" \
-        "$SOFTAP_DIR/patched/service-wifi.jar" || return 1
-
-    # ------------------------------------------------------------
-    # 4. rezip original_apex with the modified payload
-    # ------------------------------------------------------------
-    ( cd "$SOFTAP_DIR/apexzip" && rm -f ../pit/original_apex ../pit/original_apex.zip && zip -q -r -0 -X ../pit/original_apex.zip . && mv ../pit/original_apex.zip ../pit/original_apex )
-    [ -f "$SOFTAP_DIR/pit/original_apex" ] || {
-        echo "${RED} - failed to repack original_apex${RESET}"
+    HotspotFix_PATCH_PAYLOAD "$PAYLOAD" "$SOFTAP_DIR/patched/service-wifi.jar" || {
+        echo "${RED} - patching service-wifi.jar into payload failed${RESET}"
         return 1
     }
 
-    # ------------------------------------------------------------
-    # 5. update the capex apex-manifest digest so apexd re-decompresses
-    #    our modified apex instead of dropping it
-    # ------------------------------------------------------------
-    python3 scripts/utils/softap_fix.py --digest \
-        "$SOFTAP_DIR/pit/apex_manifest.pb" \
-        "$SOFTAP_DIR/pit/original_apex" || {
-        echo "${RED} - failed to update apx manifest digest${RESET}"
+    HotspotFix_STRIP_AVB_FOOTER "$PAYLOAD" "$SOFTAP_DIR/patched/payload_raw.img" || {
+        echo "${RED} - failed to strip avb footer${RESET}"
         return 1
     }
 
-    # ------------------------------------------------------------
-    # 6. rezip the capex and drop it back into the ROM
-    # ------------------------------------------------------------
-    ( cd "$SOFTAP_DIR/pit" && rm -f ../com.android.wifi.capex ../com.android.wifi.capex.zip \
-        && zip -q -r -X ../com.android.wifi.capex.zip \
-            AndroidManifest.xml apex_build_info.pb apex_manifest.pb apex_pubkey \
-            original_apex META-INF \
-        && mv ../com.android.wifi.capex.zip ../com.android.wifi.capex )
+    HotspotFix_SIGN_PAYLOAD "$SOFTAP_DIR/patched/payload_raw.img" "$SOFTAP_DIR/patched/payload_rebuilt.img" || {
+        echo "${RED} - failed to re-sign payload${RESET}"
+        return 1
+    }
 
-    local CAPEX_NEW="$SOFTAP_DIR/com.android.wifi.capex"
-    if [ ! -f "$CAPEX_NEW" ]; then
-        echo "${RED} - failed to repack capex${RESET}"
+    cp -f "$SOFTAP_DIR/patched/payload_rebuilt.img" "$PAYLOAD"
+    cp -f "$APEX_WIFI_FIX_PUB" "$SOFTAP_DIR/apexzip/apex_pubkey"
+    cp -f "$APEX_WIFI_FIX_PUB"  "$SOFTAP_DIR/pit/apex_pubkey"
+
+    local ROOT_DIGEST
+    ROOT_DIGEST=$(HotspotFix_GET_ROOT_DIGEST "$PAYLOAD") || ROOT_DIGEST=""
+    if [ -z "$ROOT_DIGEST" ]; then
+        echo "${RED} - failed to compute the new root digest${RESET}"
         return 1
     fi
 
-    # clean up stale bind-mount remnants (previous fix versions)
-    rm -rf "$EXTRACTED_FIRM_DIR/system/system/etc/lumisoftapfix" 2>/dev/null
-    rm -f "$EXTRACTED_FIRM_DIR/system/system/etc/init/lumisoftapfix.rc" 2>/dev/null
+    python3 scripts/utils/softap_fix.py --digest \
+        "$SOFTAP_DIR/pit/apex_manifest.pb" "$ROOT_DIGEST" || {
+        echo "${RED} - failed to update the apex manifest digest${RESET}"
+        return 1
+    }
 
-    cp -f "$CAPEX_NEW" "$CAPEX"
+    ( cd "$SOFTAP_DIR/apexzip" && rm -f ../pit/original_apex ../pit/original_apex.zip \
+        && zip -q -r -0 -X ../pit/original_apex.zip . \
+        && mv ../pit/original_apex.zip ../pit/original_apex )
+
+    ( cd "$SOFTAP_DIR/pit" && rm -f "$CAPEX" "$CAPEX.zip" \
+        && zip -q -r -X "$CAPEX.zip" AndroidManifest.xml \
+            apex_build_info.pb apex_manifest.pb apex_pubkey \
+            original_apex META-INF \
+        && mv "$CAPEX.zip" "$CAPEX" )
+
     echo "${GREEN} - Hotspot fix baked into $CAPEX${RESET}"
     return 0
 }

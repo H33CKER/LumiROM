@@ -17,12 +17,13 @@ StartedState.exit()'s updateApState(11) and the hotspot tile stays on
 "turning off" until reboot.
 
 Mode 2: patch the capex digest
-    softap_fix.py --digest <apex_manifest.pb> <original_apex>
+    softap_fix.py --digest <apex_manifest.pb> <root_digest>
 
-Recomputes the SHA-256 of the (post-patch) original_apex and rewrites
-the originalApexFileDigest field of the capex-level apex_manifest.pb so
-apexd re-decompresses and activates the modified apex instead of
-dropping the /data/apex/decompressed cache.
+Writes the dm-verity root digest of the (post-patch) apex payload into the
+originalApexDigest field of the capex-level apex_manifest.pb. apexd compares
+the decompressed apex's AVB root digest against this value, so it must be the
+avbtool root digest (64 hex chars), not a SHA-256 of the original_apex file.
+A path to a file is also accepted and hashed, for convenience.
 """
 
 import hashlib
@@ -79,7 +80,7 @@ def patch_smali(path: str) -> int:
 # The capex apex_manifest.pb stores the digest nested inside field 12:
 #   tag 0x62 (field 12, wiretype 2), varint len, then field 1 sub-bytes
 #   (0x0a 0x40 + 64 hex chars).
-def patch_apex_manifest_digest(manifest_path: str, original_apex_path: str) -> int:
+def patch_apex_manifest_digest(manifest_path: str, digest: str) -> int:
     data = open(manifest_path, "rb").read()
 
     old = re.search(b"\x0a\x40([0-9a-f]{64})", data)
@@ -89,7 +90,13 @@ def patch_apex_manifest_digest(manifest_path: str, original_apex_path: str) -> i
         print("softap_fix: originalApexFileDigest not found in apex_manifest.pb")
         return 1
 
-    new_hex = hashlib.sha256(open(original_apex_path, "rb").read()).hexdigest().encode()
+    # digest may be a 64-hex root digest (preferred: avbtool's hashtree root)
+    # or a path to a file whose sha256 is used.
+    if re.fullmatch(r"[0-9a-f]{64}", digest):
+        new_hex = digest.encode()
+    else:
+        new_hex = hashlib.sha256(open(digest, "rb").read()).hexdigest().encode()
+
     patched = data.replace(old.group(1), new_hex)
     if patched == data:
         print("softap_fix: apex digest already up to date")
