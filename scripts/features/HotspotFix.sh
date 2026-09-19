@@ -266,11 +266,30 @@ HotspotFix_PATCH_PAYLOAD() {
     debugfs -w -R "rm /javalib/service-wifi.jar" "$PAYLOAD_IMG" >/dev/null 2>&1
     debugfs -w -R "write $PATCHED_JAR /javalib/service-wifi.jar" "$PAYLOAD_IMG" >/dev/null 2>&1
 
-    local INODE
-    INODE=$(debugfs -R "ls -l /javalib" "$PAYLOAD_IMG" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($NF=="service-wifi.jar") print $1}')
-    if [ -n "$INODE" ] && [ "$INODE" != "service-wifi.jar" ]; then
-        debugfs -w -R "sif <$INODE> uid 1000" "$PAYLOAD_IMG" >/dev/null 2>&1
-        debugfs -w -R "sif <$INODE> gid 1000" "$PAYLOAD_IMG" >/dev/null 2>&1
+    # debugfs rm+write allocates a new inode, so the stock ownership and the
+    # security.selinux xattr are lost. Without the label system_server and
+    # odrefresh cannot open the jar (Permission denied), the class loader ends
+    # up empty and WifiService fails to load.
+    debugfs -w -R "sif /javalib/service-wifi.jar uid 1000" "$PAYLOAD_IMG" >/dev/null 2>&1
+    debugfs -w -R "sif /javalib/service-wifi.jar gid 1000" "$PAYLOAD_IMG" >/dev/null 2>&1
+
+    local LABEL_FILE="$(dirname "$PATCHED_JAR")/selinux.label"
+    printf 'u:object_r:system_file:s0\0' > "$LABEL_FILE"
+    debugfs -w -R "ea_set -f $LABEL_FILE /javalib/service-wifi.jar security.selinux" \
+        "$PAYLOAD_IMG" >/dev/null 2>&1
+
+    local OWNER LABEL
+    OWNER=$(debugfs -R "stat /javalib/service-wifi.jar" "$PAYLOAD_IMG" 2>/dev/null \
+        | awk '/User:/ {print $2"/"$4}')
+    LABEL=$(debugfs -R "ea_list /javalib/service-wifi.jar" "$PAYLOAD_IMG" 2>/dev/null \
+        | grep -a 'security.selinux')
+    case "$LABEL" in
+        *system_file*) LABEL="system_file" ;;
+        *) LABEL="" ;;
+    esac
+    if [ "$OWNER" != "1000/1000" ] || [ "$LABEL" != "system_file" ]; then
+        echo "${RED} - service-wifi.jar metadata wrong (owner=$OWNER label=$LABEL)${RESET}"
+        return 1
     fi
     echo "${GREEN} - payload patched${RESET}"
     return 0
