@@ -304,6 +304,14 @@ ADD_SOFTAP_FIX() {
 
     local EXTRACTED_FIRM_DIR="$1"
 
+    case "$STOCK_DEVICE" in
+        SM-A325F|SM-A325M|SM-M325F) ;;
+        *)
+            echo "${YELLOW}Hotspot fix skipped (not needed for $STOCK_DEVICE)${RESET}"
+            return 0
+            ;;
+    esac
+
     echo "${YELLOW}Patching Hotspot...${RESET}"
 
     local CAPEX=""
