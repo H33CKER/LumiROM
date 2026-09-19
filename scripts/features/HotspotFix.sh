@@ -6,16 +6,17 @@ export APEX_WIFI_FIX_KEY="$PWD/scripts/keys/apex-wifi-fix.pem"
 export APEX_WIFI_FIX_PUB="$PWD/scripts/keys/apex-wifi-fix.avbpubkey"
 
 # =====================================================================
-#  Hotspot teardown fix, baked into the com.android.wifi apex.
+#  Wifi teardown fix, baked into the com.android.wifi apex.
 #
 #  Root cause on MediaTek devices ported to an A34/A24 base:
-#  WifiNative.onSoftApInterfaceDestroyed() ->
-#  WifiNative.stopHalAndWificondIfNecessary() -> IWifi.stop() HIDL call
-#  into the legacy 1.0 wifi HAL (android.hardware.wifi@1.0-service-lazy),
-#  which never answers while the HAL is running wifi_cleanup. The
-#  WifiHandlerThread blocks forever and SoftApManager never leaves
-#  StartedState, so the WIFI_AP_STATE_DISABLED (11) broadcast is never
-#  sent and the hotspot tile stays on "turning off".
+#  WifiNative.stopHalAndWificondIfNecessary() -> WifiVendorHal.stopVendorHal()
+#  -> HalDeviceManager.stopWifi() -> IWifi.stop() HIDL call into the legacy
+#  1.0 wifi HAL (android.hardware.wifi@1.0-service-lazy), which never answers
+#  while the HAL is running wifi_cleanup. The WifiHandlerThread blocks
+#  forever. Via onSoftApInterfaceDestroyed that leaves the hotspot tile on
+#  "turning off"; via onClientInterfaceForConnectivityDestroyed (wifi OFF)
+#  it wedges wifi entirely, so the hotspot can no longer be started. The
+#  same call is also reached from the NAN/P2P teardown paths.
 #
 #  Fix: patch WifiNative inside the service-wifi.jar that lives in the
 #  com.android.wifi apex, then rewrite the apex *in the ROM itself*

@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""SoftAp teardown fix (two modes).
+"""Wifi teardown fix (three modes).
 
 Mode 1 (default): patch decompiled smali
     softap_fix.py <WifiNative.smali>
 
-Removes the WifiNative.stopHalAndWificondIfNecessary() invoke from
-WifiNative.onSoftApInterfaceDestroyed().
+Neutralises the blocking WifiVendorHal.stopVendorHal() call inside
+WifiNative.stopHalAndWificondIfNecessary().
 
-Why: on MediaTek devices ported to a newer base (A34/A24), when the
-SoftAp interface is destroyed the framework stops the legacy wifi HAL
-synchronously from inside the interface-destroyed listener. The
-android.hardware.wifi@1.0-service-lazy HAL is in the middle of
-wifi_cleanup at that point and never answers IWifi.stop(), blocking
-the WifiHandlerThread forever. SoftApManager then never reaches
-StartedState.exit()'s updateApState(11) and the hotspot tile stays on
-"turning off" until reboot.
+Why: on MediaTek devices ported to a newer base (A34/A24), whenever the
+last wifi interface is torn down the framework stops the legacy wifi HAL
+synchronously (WifiVendorHal.stopVendorHal -> HalDeviceManager.stopWifi ->
+WifiHalHidlImpl.stop -> IWifi.stop) while
+android.hardware.wifi@1.0-service-lazy is in the middle of wifi_cleanup.
+That HIDL call never returns, so the WifiHandlerThread blocks forever.
+Depending on the path this leaves the hotspot tile on "turning off"
+(onSoftApInterfaceDestroyed) or wedges wifi entirely so the hotspot can
+no longer be started (onClientInterfaceForConnectivityDestroyed /
+onClientInterfaceForScanDestroyed). Patching the single stopVendorHal
+call covers every path (AP, STA, NAN, P2P) while keeping the wificond
+teardown and the rest of stopHalAndWificondIfNecessary intact.
 
 Mode 2: patch the capex digest
     softap_fix.py --digest <apex_manifest.pb> <root_digest>
@@ -53,33 +57,33 @@ def patch_smali(path: str) -> int:
     start = end = None
     for i, line in enumerate(lines):
         if start is None:
-            if line.startswith(".method") and "onSoftApInterfaceDestroyed" in line:
+            if line.startswith(".method") and "stopHalAndWificondIfNecessary" in line:
                 start = i
         elif line.startswith(".end method"):
             end = i
             break
 
     if start is None or end is None:
-        print("softap_fix: onSoftApInterfaceDestroyed method not found")
+        print("softap_fix: stopHalAndWificondIfNecessary method not found")
         return 1
 
     body = lines[start + 1:end]
     invoke = [j for j, line in enumerate(body)
-              if "stopHalAndWificondIfNecessary" in line and "invoke-direct" in line]
+              if "WifiVendorHal;->stopVendorHal()V" in line and "invoke-virtual" in line]
     if not invoke:
-        print("softap_fix: call not present (already patched or newer base)")
+        print("softap_fix: stopVendorHal call not present (already patched or newer base)")
         return 0
     if len(invoke) != 1:
-        print(f"softap_fix: expected 1 invoke site, found {len(invoke)}; aborting")
+        print(f"softap_fix: expected 1 stopVendorHal invoke site, found {len(invoke)}; aborting")
         return 1
 
-    del body[invoke[0]]
+    body[invoke[0]] = "    nop\n"
 
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.writelines(lines[:start + 1] + body + lines[end:])
     shutil.move(tmp, path)
-    print("softap_fix: removed stopHalAndWificondIfNecessary from onSoftApInterfaceDestroyed")
+    print("softap_fix: neutralised stopVendorHal in stopHalAndWificondIfNecessary")
     return 0
 
 
