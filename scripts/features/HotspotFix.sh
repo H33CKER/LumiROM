@@ -142,12 +142,16 @@ LUMISOFTAPFIX_SH
         # Idempotency marker tied to the full current block, not to the type,
         # so an old FIRMWARE dir (cached extraction) gets re-synced.
         if ! grep -q "roletype object_r lumisoftapfix" "$SELINUX_CIL"; then
-            # Drop any stale partial block from previous fix versions.
-            sed -i '/^(type lumisoftapfix)/,/^LUMISOFTAPFIX_END$/d' "$SELINUX_CIL"
+            # Drop any previously appended block (it always starts at
+            # "(type lumisoftapfix)" and ends at the marker line).
+            sed -i '/^(type lumisoftapfix)/,/^LUMISOFTAPFIX_CIL$/d' "$SELINUX_CIL"
             cat >> "$SELINUX_CIL" <<'LUMISOFTAPFIX_CIL'
 
 (type lumisoftapfix)
 (roletype object_r lumisoftapfix)
+(typeattribute lumisoftapfix_dom)
+(typeattributeset lumisoftapfix_dom (lumisoftapfix))
+(roletype r lumisoftapfix_dom)
 (allow init lumisoftapfix (process (transition)))
 (allow lumisoftapfix system_file (dir (search)))
 (allow lumisoftapfix system_file (file (execute open read getattr execute_no_trans mounton)))
