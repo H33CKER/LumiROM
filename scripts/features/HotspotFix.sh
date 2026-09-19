@@ -138,6 +138,31 @@ HotspotFix_GET_ROOT_DIGEST() {
 }
 
 # ---------------------------------------------------------------
+# Locate the Android SDK's zipalign (preferred) for APEX page alignment
+# ---------------------------------------------------------------
+HotspotFix_FIND_ZIPALIGN() {
+    if [ -n "$ZIPALIGN" ] && [ -x "$ZIPALIGN" ]; then
+        echo "$ZIPALIGN"
+        return 0
+    fi
+    if command -v zipalign >/dev/null 2>&1; then
+        command -v zipalign
+        return 0
+    fi
+    local root cand roots
+    roots="$ANDROID_HOME $ANDROID_SDK_ROOT $HOME/Android/Sdk $HOME/android-sdk ${ANDROID_HOME:-/nonexistent}"
+    for root in $roots; do
+        [ -d "$root/build-tools" ] || continue
+        cand=$(ls -1 "$root"/build-tools/*/zipalign 2>/dev/null | sort -V | tail -1)
+        if [ -n "$cand" ]; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------
 # Replace the service-wifi.jar inside the ext4 payload
 # ---------------------------------------------------------------
 HotspotFix_PATCH_PAYLOAD() {
@@ -253,6 +278,28 @@ ADD_SOFTAP_FIX() {
     ( cd "$SOFTAP_DIR/apexzip" && rm -f ../pit/original_apex ../pit/original_apex.zip \
         && zip -q -r -0 -X ../pit/original_apex.zip . \
         && mv ../pit/original_apex.zip ../pit/original_apex )
+
+    # dm-verity needs apex_payload.img on a 4096-byte boundary inside the
+    # APEX; plain zip loses that alignment and apexd fails the mount with
+    # EINVAL. zipalign is the canonical fix (AOSP builds use it too); fall
+    # back to the portable python implementation when it is unavailable.
+    local ZIPALIGN_BIN
+    if ZIPALIGN_BIN=$(HotspotFix_FIND_ZIPALIGN); then
+        echo "${YELLOW} - Aligning apex with $ZIPALIGN_BIN${RESET}"
+        "$ZIPALIGN_BIN" -f 4096 \
+            "$SOFTAP_DIR/pit/original_apex" "$SOFTAP_DIR/pit/original_apex.aligned" || {
+            echo "${RED} - zipalign failed${RESET}"
+            return 1
+        }
+        mv -f "$SOFTAP_DIR/pit/original_apex.aligned" "$SOFTAP_DIR/pit/original_apex"
+    else
+        echo "${YELLOW} - zipalign not found, using python fallback${RESET}"
+        python3 scripts/utils/softap_fix.py --align \
+            "$SOFTAP_DIR/pit/original_apex" 4096 || {
+            echo "${RED} - apex alignment failed${RESET}"
+            return 1
+        }
+    fi
 
     ( cd "$SOFTAP_DIR/pit" && rm -f "$CAPEX" "$CAPEX.zip" \
         && zip -q -r -X "$CAPEX.zip" AndroidManifest.xml \

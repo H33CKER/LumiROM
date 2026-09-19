@@ -24,14 +24,23 @@ originalApexDigest field of the capex-level apex_manifest.pb. apexd compares
 the decompressed apex's AVB root digest against this value, so it must be the
 avbtool root digest (64 hex chars), not a SHA-256 of the original_apex file.
 A path to a file is also accepted and hashed, for convenience.
+
+Mode 3: page-align an APEX zip
+    softap_fix.py --align <apex> [alignment]
+
+Re-writes the APEX zip so apex_payload.img (and every other stored entry)
+starts on a multiple of `alignment` (default 4096). Used as a portable
+fallback when the Android SDK's zipalign is not available.
 """
 
 import hashlib
 import os
 import re
 import shutil
+import struct
 import sys
 import tempfile
+import zipfile
 
 
 # ------------------------------------------------------------------
@@ -110,9 +119,56 @@ def patch_apex_manifest_digest(manifest_path: str, digest: str) -> int:
     return 0
 
 
+# ------------------------------------------------------------------
+# mode 3: page-align the stored entries of an APEX zip
+# ------------------------------------------------------------------
+# dm-verity needs apex_payload.img to start on a 4096-byte boundary inside
+# the (decompressed) APEX. Re-zipping it with plain zip loses that
+# alignment and apexd then fails to mount the package with EINVAL. This is
+# a portable stand-in for `zipalign 4096`: it re-writes the zip adding a
+# padding extra field to every stored file entry so its data offset is a
+# multiple of the alignment (directories and deflated entries are left
+# alone, matching zipalign).
+def align_apex_zip(path: str, align: int = 4096) -> int:
+    if align < 4 or (align & (align - 1)) != 0:
+        print("softap_fix: alignment must be a power of two >= 4")
+        return 1
+
+    with zipfile.ZipFile(path, "r") as src:
+        entries = [(zi, src.read(zi.filename)) for zi in src.infolist()]
+
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".align")
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp, "w") as out:
+            for zi, data in entries:
+                info = zipfile.ZipInfo(zi.filename, zi.date_time)
+                info.compress_type = zi.compress_type
+                info.external_attr = zi.external_attr
+                info.internal_attr = zi.internal_attr
+                info.create_system = zi.create_system
+                info.extra = zi.extra
+                if zi.compress_type == zipfile.ZIP_STORED and not zi.is_dir():
+                    base = out.fp.tell() + 30 + len(zi.filename.encode())
+                    pad = (align - (base % align)) % align
+                    if pad < 4:
+                        pad += align
+                    info.extra = struct.pack("<HH", 0xD935, pad - 4) + b"\x00" * (pad - 4)
+                out.writestr(info, data)
+        shutil.move(tmp, path)
+    except BaseException:
+        os.path.exists(tmp) and os.remove(tmp)
+        raise
+    print(f"softap_fix: apex zip aligned to {align}")
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) == 4 and sys.argv[1] == "--digest":
         return patch_apex_manifest_digest(sys.argv[2], sys.argv[3])
+    if len(sys.argv) in (3, 4) and sys.argv[1] == "--align":
+        align = int(sys.argv[3]) if len(sys.argv) == 4 else 4096
+        return align_apex_zip(sys.argv[2], align)
     if len(sys.argv) != 2:
         print(__doc__)
         return 1
