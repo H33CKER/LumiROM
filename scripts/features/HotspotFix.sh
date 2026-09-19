@@ -139,7 +139,11 @@ LUMISOFTAPFIX_SH
     # Mirrors the magisk-module flow so no Magisk module is required.
     local SELINUX_CIL="$EXTRACTED_FIRM_DIR/system/system_ext/etc/selinux/system_ext_sepolicy.cil"
     if [ -f "$SELINUX_CIL" ]; then
-        if ! grep -q "(type lumisoftapfix)" "$SELINUX_CIL"; then
+        # Idempotency marker tied to the full current block, not to the type,
+        # so an old FIRMWARE dir (cached extraction) gets re-synced.
+        if ! grep -q "roletype object_r lumisoftapfix" "$SELINUX_CIL"; then
+            # Drop any stale partial block from previous fix versions.
+            sed -i '/^(type lumisoftapfix)/,/^LUMISOFTAPFIX_END$/d' "$SELINUX_CIL"
             cat >> "$SELINUX_CIL" <<'LUMISOFTAPFIX_CIL'
 
 (type lumisoftapfix)
