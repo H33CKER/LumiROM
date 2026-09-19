@@ -143,6 +143,7 @@ LUMISOFTAPFIX_SH
             cat >> "$SELINUX_CIL" <<'LUMISOFTAPFIX_CIL'
 
 (type lumisoftapfix)
+(roletype object_r lumisoftapfix)
 (allow init lumisoftapfix (process (transition)))
 (allow lumisoftapfix system_file (dir (search)))
 (allow lumisoftapfix system_file (file (execute open read getattr execute_no_trans mounton)))
