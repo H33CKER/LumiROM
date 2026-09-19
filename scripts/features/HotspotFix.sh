@@ -1,6 +1,31 @@
 #!/bin/bash
 source scripts/utils/bash_colors.sh
 
+# =====================================================================
+#  Hotspot teardown fix, baked into the com.android.wifi apex.
+#
+#  Root cause on MediaTek devices ported to an A34/A24 base:
+#  WifiNative.onSoftApInterfaceDestroyed() ->
+#  WifiNative.stopHalAndWificondIfNecessary() -> IWifi.stop() HIDL call
+#  into the legacy 1.0 wifi HAL (android.hardware.wifi@1.0-service-lazy),
+#  which never answers while the HAL is running wifi_cleanup. The
+#  WifiHandlerThread blocks forever and SoftApManager never leaves
+#  StartedState, so the WIFI_AP_STATE_DISABLED (11) broadcast is never
+#  sent and the hotspot tile stays on "turning off".
+#
+#  Fix: patch WifiNative inside the service-wifi.jar that lives in the
+#  com.android.wifi apex and rewrite the apex *in the ROM itself*
+#  (capex repack, done here at build time). No bind-mount, no SELinux
+#  service, no Magisk, no post-fs-data hooks. The apexd digest inside
+#  the capex (originalApexFileDigest) is recomputed so apexd
+#  re-decompresses and activates our modified apex normally. This also
+#  survives bootloader-unlocked (verifiedbootstate=orange) devices
+#  where the apex payload is mounted without merkle enforcement.
+# =====================================================================
+
+# ---------------------------------------------------------------
+# Build the patched service-wifi.jar (smali edit via softap_fix.py)
+# ---------------------------------------------------------------
 HotspotFix_BUILD_PATCHED_JAR() {
     if [ "$#" -ne 3 ]; then
         echo "Usage: ${FUNCNAME[0]} <WORK_DIR_SOFTAP> <APKTOOL_JAR> <SRC_JAR>"
@@ -38,6 +63,30 @@ HotspotFix_BUILD_PATCHED_JAR() {
     return 0
 }
 
+# ---------------------------------------------------------------
+# Swap the service-wifi.jar inside a dm-verity payload image
+# ---------------------------------------------------------------
+HotspotFix_PATCH_PAYLOAD() {
+    if [ "$#" -ne 2 ]; then
+        echo "Usage: ${FUNCNAME[0]} <PAYLOAD_IMG> <PATCHED_JAR>"
+        return 1
+    fi
+
+    local PAYLOAD_IMG="$1"
+    local PATCHED_JAR="$2"
+
+    debugfs -w -R "rm /javalib/service-wifi.jar" "$PAYLOAD_IMG" >/dev/null 2>&1
+    debugfs -w -R "write $PATCHED_JAR /javalib/service-wifi.jar" "$PAYLOAD_IMG" >/dev/null 2>&1
+
+    local INODE
+    INODE=$(debugfs -R "ls -l /javalib" "$PAYLOAD_IMG" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($NF=="service-wifi.jar") print $1}')
+    if [ -n "$INODE" ] && [ "$INODE" != "service-wifi.jar" ]; then
+        debugfs -w -R "sif <$INODE> uid 1000" "$PAYLOAD_IMG" >/dev/null 2>&1
+        debugfs -w -R "sif <$INODE> gid 1000" "$PAYLOAD_IMG" >/dev/null 2>&1
+    fi
+    echo "${GREEN} - payload patched${RESET}"
+    return 0
+}
 ADD_SOFTAP_FIX() {
     echo ""
     if [ "$#" -ne 1 ]; then
@@ -69,101 +118,85 @@ ADD_SOFTAP_FIX() {
 
     local SOFTAP_DIR="$WORK_DIR/softapfix"
     rm -rf "$SOFTAP_DIR"
-    mkdir -p "$SOFTAP_DIR/pit" "$SOFTAP_DIR/patched"
+    mkdir -p "$SOFTAP_DIR/pit" "$SOFTAP_DIR/patched" "$SOFTAP_DIR/apexzip"
 
-    if [[ "$CAPEX" == *.capex ]]; then
-        unzip -oqq "$CAPEX" "original_apex" -d "$SOFTAP_DIR/pit" || {
-            echo "${RED} - failed to read capex${RESET}"
-            return 1
-        }
-        # original_apex is an apex zip carrying the dm-verity payload img
-        unzip -oqq "$SOFTAP_DIR/pit/original_apex" "apex_payload.img" -d "$SOFTAP_DIR/pit" || {
-            echo "${RED} - failed to unzip original apex payload${RESET}"
-            return 1
-        }
-    fi
+    # ------------------------------------------------------------
+    # 1. unpack the capex (a plain zip container around original_apex)
+    # ------------------------------------------------------------
+    cp -f "$CAPEX" "$SOFTAP_DIR/original.capex"
+    unzip -qq "$SOFTAP_DIR/original.capex" -d "$SOFTAP_DIR/pit" || {
+        echo "${RED} - failed to unzip capex${RESET}"
+        return 1
+    }
 
-    local PAYLOAD_IMG="$SOFTAP_DIR/pit/apex_payload.img"
-    if [ ! -f "$PAYLOAD_IMG" ]; then
+    # ------------------------------------------------------------
+    # 2. unpack original_apex (contains apex_payload.img) and build
+    #    the patched service-wifi.jar
+    # ------------------------------------------------------------
+    unzip -qq "$SOFTAP_DIR/pit/original_apex" -d "$SOFTAP_DIR/apexzip" || {
+        echo "${RED} - failed to unzip original apex${RESET}"
+        return 1
+    }
+
+    if [ ! -f "$SOFTAP_DIR/apexzip/apex_payload.img" ]; then
         echo "${RED} - apex_payload.img missing${RESET}"
         return 1
     fi
 
     debugfs -R "dump /javalib/service-wifi.jar $SOFTAP_DIR/patched/service-wifi.jar" \
-        "$PAYLOAD_IMG" >/dev/null 2>&1 || {
-        echo "${RED} - could not extract service-wifi.jar from apex payload img${RESET}"
-        return 1
-    }
+        "$SOFTAP_DIR/apexzip/apex_payload.img" >/dev/null 2>&1
+
     HotspotFix_BUILD_PATCHED_JAR "$SOFTAP_DIR" "$APKTOOL" "$SOFTAP_DIR/patched/service-wifi.jar" || {
         echo "${RED} - SoftAp teardown patch aborted${RESET}"
         return 1
     }
 
-    local FIX_DIR="$EXTRACTED_FIRM_DIR/system/system/etc/lumisoftapfix"
-    local INIT_DIR="$EXTRACTED_FIRM_DIR/system/system/etc/init"
-    mkdir -p "$FIX_DIR" "$INIT_DIR"
+    # ------------------------------------------------------------
+    # 3. inject the patched jar into the apex_payload.img
+    # ------------------------------------------------------------
+    HotspotFix_PATCH_PAYLOAD "$SOFTAP_DIR/apexzip/apex_payload.img" \
+        "$SOFTAP_DIR/patched/service-wifi.jar" || return 1
 
-    cp -f "$SOFTAP_DIR/patched/service-wifi.jar" "$FIX_DIR/service-wifi.jar"
+    # ------------------------------------------------------------
+    # 4. rezip original_apex with the modified payload
+    # ------------------------------------------------------------
+    ( cd "$SOFTAP_DIR/apexzip" && rm -f ../pit/original_apex ../pit/original_apex.zip && zip -q -r -X ../pit/original_apex.zip . && mv ../pit/original_apex.zip ../pit/original_apex )
+    [ -f "$SOFTAP_DIR/pit/original_apex" ] || {
+        echo "${RED} - failed to repack original_apex${RESET}"
+        return 1
+    }
 
-    cat > "$INIT_DIR/lumisoftapfix.rc" <<'LUMISOFTAPFIX_RC'
-service lumisoftapfix /system/bin/sh /system/etc/lumisoftapfix/mount.sh
-    user root
-    group root
-    oneshot
-    disabled
-    seclabel u:r:lumisoftapfix:s0
+    # ------------------------------------------------------------
+    # 5. update the capex apex-manifest digest so apexd re-decompresses
+    #    our modified apex instead of dropping it
+    # ------------------------------------------------------------
+    python3 scripts/utils/softap_fix.py --digest \
+        "$SOFTAP_DIR/pit/apex_manifest.pb" \
+        "$SOFTAP_DIR/pit/original_apex" || {
+        echo "${RED} - failed to update apx manifest digest${RESET}"
+        return 1
+    }
 
-on post-fs-data
-    start lumisoftapfix
-LUMISOFTAPFIX_RC
+    # ------------------------------------------------------------
+    # 6. rezip the capex and drop it back into the ROM
+    # ------------------------------------------------------------
+    ( cd "$SOFTAP_DIR/pit" && rm -f ../com.android.wifi.capex ../com.android.wifi.capex.zip \
+        && zip -q -r -X ../com.android.wifi.capex.zip \
+            AndroidManifest.xml apex_build_info.pb apex_manifest.pb apex_pubkey \
+            original_apex META-INF \
+        && mv ../com.android.wifi.capex.zip ../com.android.wifi.capex )
 
-    # Wait for apex activation to finish before mounting (com.android.wifi
-    # activates during post-fs-data), then overlay the patched jar.
-    cat > "$FIX_DIR/mount.sh" <<'LUMISOFTAPFIX_SH'
-#!/system/bin/sh
-DST=/apex/com.android.wifi/javalib/service-wifi.jar
-SRC=/system/etc/lumisoftapfix/service-wifi.jar
-i=0
-while [ $i -lt 60 ]; do
-    [ -e "$DST" ] && break
-    sleep 1
-    i=$((i+1))
-done
-[ -e "$DST" ] || exit 0
-mount -o bind "$SRC" "$DST" 2>/dev/null
-LUMISOFTAPFIX_SH
-    chmod 755 "$FIX_DIR/mount.sh"
-
-
-    # Baked SELinux rules for the lumisoftapfix service domain (Enforcing).
-    # Mirrors the magisk-module flow so no Magisk module is required.
-    local SELINUX_CIL="$EXTRACTED_FIRM_DIR/system/system_ext/etc/selinux/system_ext_sepolicy.cil"
-    if [ -f "$SELINUX_CIL" ]; then
-        # Idempotency marker tied to the full current block, not to the type,
-        # so an old FIRMWARE dir (cached extraction) gets re-synced.
-        if ! grep -q "roletype object_r lumisoftapfix" "$SELINUX_CIL"; then
-            # Drop any previously appended block (it always starts at
-            # "(type lumisoftapfix)" and ends at the marker line).
-            sed -i '/^(type lumisoftapfix)/,/^LUMISOFTAPFIX_CIL$/d' "$SELINUX_CIL"
-            cat >> "$SELINUX_CIL" <<'LUMISOFTAPFIX_CIL'
-
-(type lumisoftapfix)
-(roletype object_r lumisoftapfix)
-(typeattribute lumisoftapfix_dom)
-(typeattributeset lumisoftapfix_dom (lumisoftapfix))
-(roletype r lumisoftapfix_dom)
-(allow init lumisoftapfix (process (transition)))
-(allow lumisoftapfix system_file (dir (search)))
-(allow lumisoftapfix system_file (file (execute open read getattr execute_no_trans mounton)))
-(allow lumisoftapfix shell_exec (file (entrypoint execute open read getattr execute_no_trans)))
-(allow lumisoftapfix fs_type (filesystem (mount unmount)))
-(allow lumisoftapfix proc (dir (search)))
-(allow lumisoftapfix proc (file (read open getattr)))
-(allow lumisoftapfix self (process (setexec)))
-LUMISOFTAPFIX_CIL
-        fi
+    local CAPEX_NEW="$SOFTAP_DIR/com.android.wifi.capex"
+    if [ ! -f "$CAPEX_NEW" ]; then
+        echo "${RED} - failed to repack capex${RESET}"
+        return 1
     fi
 
-    echo "${GREEN} - Hotspot fix installed${RESET}"
+    # clean up stale bind-mount remnants (previous fix versions)
+    rm -rf "$EXTRACTED_FIRM_DIR/system/system/etc/lumisoftapfix" 2>/dev/null
+    rm -f "$EXTRACTED_FIRM_DIR/system/system/etc/init/lumisoftapfix.rc" 2>/dev/null
+
+    cp -f "$CAPEX_NEW" "$CAPEX"
+    echo "${GREEN} - Hotspot fix baked into $CAPEX${RESET}"
     return 0
 }
