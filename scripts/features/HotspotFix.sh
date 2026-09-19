@@ -1,5 +1,6 @@
 #!/bin/bash
 source scripts/utils/bash_colors.sh
+[ -f scripts/utils/platform_key.sh ] && source scripts/utils/platform_key.sh
 export AVBTOOL_BIN="${AVBTOOL:-$PWD/bin/avb/avbtool}"
 export APEX_WIFI_FIX_KEY="$PWD/scripts/keys/apex-wifi-fix.pem"
 export APEX_WIFI_FIX_PUB="$PWD/scripts/keys/apex-wifi-fix.avbpubkey"
@@ -163,6 +164,95 @@ HotspotFix_FIND_ZIPALIGN() {
 }
 
 # ---------------------------------------------------------------
+# Locate the Android SDK's apksigner
+# ---------------------------------------------------------------
+HotspotFix_FIND_APKSIGNER() {
+    if [ -n "$APKSIGNER" ] && [ -x "$APKSIGNER" ]; then
+        echo "$APKSIGNER"
+        return 0
+    fi
+    if command -v apksigner >/dev/null 2>&1; then
+        command -v apksigner
+        return 0
+    fi
+    local root cand roots
+    roots="$ANDROID_HOME $ANDROID_SDK_ROOT $HOME/Android/Sdk $HOME/android-sdk"
+    for root in $roots; do
+        [ -d "$root/build-tools" ] || continue
+        cand=$(ls -1 "$root"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+        if [ -n "$cand" ]; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------
+# Rebuild the APEX zip with a valid APK signature and page alignment
+# ---------------------------------------------------------------
+# The inner APEX is a signed zip: system_server's PackageParser verifies
+# its APK signature. Re-zipping drops the v2/v3 signing block and breaks
+# the v1 digests, so the package is rejected and system_server reboots to
+# recovery (recoveryDecompressedApex). zipalign also strips the signing
+# block, so the order must be: rebuild (no directory entries) -> zipalign
+# -> apksigner with --alignment-preserved, which keeps the 4096-byte
+# apex_payload.img offset dm-verity needs.
+HotspotFix_REPACK_SIGN_APEX() {
+    if [ "$#" -ne 2 ]; then
+        echo "Usage: ${FUNCNAME[0]} <STAGING_DIR> <OUT_APEX>"
+        return 1
+    fi
+    local STAGE="$1"
+    local OUT="$2"
+
+    local ZIPALIGN_BIN APKSIGNER_BIN KEY_DIR
+    ZIPALIGN_BIN=$(HotspotFix_FIND_ZIPALIGN) || {
+        echo "${RED} - zipalign not found (needed to page-align the APEX)${RESET}"
+        return 1
+    }
+    APKSIGNER_BIN=$(HotspotFix_FIND_APKSIGNER) || {
+        echo "${RED} - apksigner not found (needed to sign the APEX)${RESET}"
+        return 1
+    }
+    KEY_DIR="$(GET_ACTIVE_KEY_FILES)"
+    if [ -z "$KEY_DIR" ] || [ ! -f "$KEY_DIR/platform.pk8" ]; then
+        echo "${RED} - no platform signing key available for the APEX${RESET}"
+        return 1
+    fi
+
+    local FILES
+    FILES=$(cd "$STAGE" && find . -type f ! -path './META-INF/*' -printf '%P\n' | sort)
+    if ! printf '%s\n' "$FILES" | grep -qx 'apex_payload.img'; then
+        echo "${RED} - apex_payload.img missing from staging dir${RESET}"
+        return 1
+    fi
+    # payload/pubkey first (matches AOSP's APEX layout)
+    FILES=$(printf '%s\n' "$FILES" | grep -vx 'apex_payload.img' | grep -vx 'apex_pubkey' | tr '\n' ' ')
+    FILES="apex_payload.img apex_pubkey $FILES"
+
+    rm -f "$OUT" "$OUT.zip" "$OUT.aligned"
+    ( cd "$STAGE" && zip -q -0 -X "$OUT.zip" $FILES ) || {
+        echo "${RED} - failed to rebuild the APEX zip${RESET}"
+        return 1
+    }
+    mv -f "$OUT.zip" "$OUT"
+    "$ZIPALIGN_BIN" -f 4096 "$OUT" "$OUT.aligned" || {
+        echo "${RED} - zipalign failed${RESET}"
+        return 1
+    }
+    "$APKSIGNER_BIN" sign \
+        --key "$KEY_DIR/platform.pk8" --cert "$KEY_DIR/platform.x509.pem" \
+        --alignment-preserved true \
+        --out "$OUT" "$OUT.aligned" || {
+        echo "${RED} - apksigner failed${RESET}"
+        return 1
+    }
+    rm -f "$OUT.aligned"
+    return 0
+}
+
+# ---------------------------------------------------------------
 # Replace the service-wifi.jar inside the ext4 payload
 # ---------------------------------------------------------------
 HotspotFix_PATCH_PAYLOAD() {
@@ -275,31 +365,11 @@ ADD_SOFTAP_FIX() {
         return 1
     }
 
-    ( cd "$SOFTAP_DIR/apexzip" && rm -f ../pit/original_apex ../pit/original_apex.zip \
-        && zip -q -r -0 -X ../pit/original_apex.zip . \
-        && mv ../pit/original_apex.zip ../pit/original_apex )
-
-    # dm-verity needs apex_payload.img on a 4096-byte boundary inside the
-    # APEX; plain zip loses that alignment and apexd fails the mount with
-    # EINVAL. zipalign is the canonical fix (AOSP builds use it too); fall
-    # back to the portable python implementation when it is unavailable.
-    local ZIPALIGN_BIN
-    if ZIPALIGN_BIN=$(HotspotFix_FIND_ZIPALIGN); then
-        echo "${YELLOW} - Aligning apex with $ZIPALIGN_BIN${RESET}"
-        "$ZIPALIGN_BIN" -f 4096 \
-            "$SOFTAP_DIR/pit/original_apex" "$SOFTAP_DIR/pit/original_apex.aligned" || {
-            echo "${RED} - zipalign failed${RESET}"
-            return 1
-        }
-        mv -f "$SOFTAP_DIR/pit/original_apex.aligned" "$SOFTAP_DIR/pit/original_apex"
-    else
-        echo "${YELLOW} - zipalign not found, using python fallback${RESET}"
-        python3 scripts/utils/softap_fix.py --align \
-            "$SOFTAP_DIR/pit/original_apex" 4096 || {
-            echo "${RED} - apex alignment failed${RESET}"
-            return 1
-        }
-    fi
+    echo "${YELLOW} - Rebuilding and signing the inner APEX${RESET}"
+    HotspotFix_REPACK_SIGN_APEX "$SOFTAP_DIR/apexzip" "$SOFTAP_DIR/pit/original_apex" || {
+        echo "${RED} - APEX repack/sign failed${RESET}"
+        return 1
+    }
 
     ( cd "$SOFTAP_DIR/pit" && rm -f "$CAPEX" "$CAPEX.zip" \
         && zip -q -r -X "$CAPEX.zip" AndroidManifest.xml \
