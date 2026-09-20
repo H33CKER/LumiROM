@@ -3,20 +3,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Luminous418/LumiROM/actions/workflows/OneUi8-5.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/Luminous418/LumiROM/OneUi8-5.yml?branch=OneUI8.5&label=Specific%20Device&logo=github" alt="Specific Device Workflow">
+  <a href="https://github.com/LumiROM/LumiROM/actions/workflows/OneUi8-5.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/LumiROM/LumiROM/OneUi8-5.yml?branch=OneUI8.5&label=Specific%20Device&logo=github" alt="Specific Device Workflow">
   </a>
-  <a href="https://github.com/Luminous418/LumiROM/actions/workflows/OneUi8-5-Matrix.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/Luminous418/LumiROM/OneUi8-5-Matrix.yml?branch=OneUI8.5&label=All%20Devices&logo=github" alt="All Devices Workflow">
+  <a href="https://github.com/LumiROM/LumiROM/actions/workflows/OneUi8-5-Matrix.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/LumiROM/LumiROM/OneUi8-5-Matrix.yml?branch=OneUI8.5&label=All%20Devices&logo=github" alt="All Devices Workflow">
   </a>
-  <a href="https://github.com/Luminous418/LumiROM/stargazers">
-    <img src="https://img.shields.io/github/stars/Luminous418/LumiROM?style=flat&logo=github&label=Stars" alt="Stars">
+  <a href="https://github.com/LumiROM/LumiROM/stargazers">
+    <img src="https://img.shields.io/github/stars/LumiROM/LumiROM?style=flat&logo=github&label=Stars" alt="Stars">
   </a>
-  <a href="https://github.com/Luminous418/LumiROM/network/members">
-    <img src="https://img.shields.io/github/forks/Luminous418/LumiROM?style=flat&logo=github&label=Forks" alt="Forks">
+  <a href="https://github.com/LumiROM/LumiROM/network/members">
+    <img src="https://img.shields.io/github/forks/LumiROM/LumiROM?style=flat&logo=github&label=Forks" alt="Forks">
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/github/license/Luminous418/LumiROM?style=flat&label=License" alt="License">
+    <img src="https://img.shields.io/github/license/LumiROM/LumiROM?style=flat&label=License" alt="License">
   </a>
 </p>
 
@@ -34,7 +34,7 @@ It downloads the firmware from Samsung servers using [samloader](https://github.
 The whole process can run either on **GitHub Actions** or **locally** on your machine (requires Ubuntu/Debian distro or WSL).
 
 ## Changelogs
-Check the [changelogs folder](https://github.com/Luminous418/LumiROM/blob/OneUI8.5/changelogs/README.md) to learn more about each release and useful information.
+Check the [changelogs folder](https://github.com/LumiROM/LumiROM/blob/OneUI8.5/changelogs/README.md) to learn more about each release and useful information.
 
 ## Supported Devices
 
@@ -124,6 +124,9 @@ Open your forked repository.
 - Select LumiROM Tools.
 - Click Run workflow.
 
+> [!IMPORTANT]
+> The build version is read from a **repository variable** named `LUMIROM_VERSION`, so you never edit the workflow to bump a release. Set it once under Settings → Secrets and variables → Actions → **Variables** tab, with the version as the value (e.g. `1.0.0`).
+
 #### 3. Set Your Device Model:
 Fill in the `STOCK_DEVICE` and `TARGET_DEVICE` options:
 - `STOCK_DEVICE`: your phone's model. If it is present in the /LumiROM/Devices folder of this repository (see [Supported Devices](#supported-devices)), the tool will work for your device. If not, it will not work.
@@ -173,9 +176,15 @@ You can also build LumiROM directly on your Linux machine using the local build 
 
 #### 1. Clone the repository:
 ```bash
-git clone https://github.com/Luminous418/LumiROM.git
+git clone https://github.com/LumiROM/LumiROM.git
 cd LumiROM
 ```
+
+> [!IMPORTANT]
+> The local build reads `LUMIROM_VERSION` from a `.env` file in the repository root (the same file used for signing keys). Create it if you don't have one, otherwise the build has no version:
+> ```bash
+> echo 'export LUMIROM_VERSION="1.0.0"' >> .env
+> ```
 
 #### 2. Choose your options:
 Only the stock model, region and IMEI are required - everything else has a default:
