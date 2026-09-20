@@ -109,7 +109,7 @@ FLASHABLE_ZIP_CREATION() {
         {
             echo "device=$DEVICE_CODENAME"
             echo "device_model=$STOCK_DEVICE"
-            echo "version=$LUMIROM_VERSION-$BUILD_DATE"
+            echo "version=$LUMIROM_VERSION"
             echo "version_code=$LUMIROM_CODE"
             echo "build_date=$(date +%F)"
             echo "android_version=$ANDROID_VERSION"
