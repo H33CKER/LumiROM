@@ -6,6 +6,11 @@
 
 START_TIME=$(date +%s)
 
+# Load local overrides (LUMIROM_VERSION, signing keys...). Forks may not have a .env.
+if [ -f .env ]; then
+    source .env
+fi
+
 # =====================================================================
 #  Default configuration
 # =====================================================================
@@ -128,7 +133,6 @@ resolve_target_device() {
 # =====================================================================
 setup_environment() {
     export OUTPUT_FILESYSTEM="erofs"
-    export LUMIROM_VERSION="8.6.5"
     export LUMIROM_CODE="${LUMIROM_VERSION//./0}"
     export OUT_DIR="$PWD/OUT"
     export WORK_DIR="$PWD/TMP/LumiWORK"

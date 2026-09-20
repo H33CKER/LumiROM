@@ -108,8 +108,10 @@ jobs:
     
     - name: Set build environment
       shell: bash
+      env:
+        LUMIROM_VERSION: ${{ vars.LUMIROM_VERSION }}
       run: |
-        VERSION="8.6.5"
+        VERSION="${LUMIROM_VERSION}"
 
         echo "STOCK_DEVICE=${{ github.event.inputs.STOCK_DEVICE }}" >> $GITHUB_ENV
         echo "TARGET_DEVICE=${{ github.event.inputs.TARGET_DEVICE }}" >> $GITHUB_ENV

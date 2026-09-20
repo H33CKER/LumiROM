@@ -124,6 +124,9 @@ Open your forked repository.
 - Select LumiROM Tools.
 - Click Run workflow.
 
+> [!IMPORTANT]
+> The build version is read from a **repository variable** named `LUMIROM_VERSION`, so you never edit the workflow to bump a release. Set it once under Settings → Secrets and variables → Actions → **Variables** tab, with the version as the value (e.g. `1.0.0`).
+
 #### 3. Set Your Device Model:
 Fill in the `STOCK_DEVICE` and `TARGET_DEVICE` options:
 - `STOCK_DEVICE`: your phone's model. If it is present in the /LumiROM/Devices folder of this repository (see [Supported Devices](#supported-devices)), the tool will work for your device. If not, it will not work.
@@ -176,6 +179,12 @@ You can also build LumiROM directly on your Linux machine using the local build 
 git clone https://github.com/LumiROM/LumiROM.git
 cd LumiROM
 ```
+
+> [!IMPORTANT]
+> The local build reads `LUMIROM_VERSION` from a `.env` file in the repository root (the same file used for signing keys). Create it if you don't have one, otherwise the build has no version:
+> ```bash
+> echo 'export LUMIROM_VERSION="1.0.0"' >> .env
+> ```
 
 #### 2. Choose your options:
 Only the stock model, region and IMEI are required - everything else has a default:
