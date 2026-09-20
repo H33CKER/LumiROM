@@ -13,7 +13,7 @@
 - Added software update onto settings that opens Cloudy.
 - Added LumiROM logo to About software.
 - Updated Cloudy to `2.4`.
-- Added more wallpapers to the ROM, check them out! Thanks to [elytra](https://github.com/vivacumtechh) for doing it!
+- Added more wallpapers to the ROM, check them out! Thanks to [elytra](https://github.com/elytraflying) for doing it!
 
 ## More
 - [Repo] OTA builds: incremental target files in TARGET_FILES, OTA signing with LumiROM keys, official builds now detected by platform certificate (no more firmware-hash hacks).
