@@ -103,6 +103,7 @@ FLASHABLE_ZIP_CREATION() {
             ONEUI_VERSION="${ONEUI_VERSION:0:3}"
             ONEUI_VERSION="${ONEUI_VERSION/0/.}"
         fi
+        ONEUI_VERSION_UNCUT="$(grep "^ro.build.version.oneui=" "$BUILD_PROP" | cut -d "=" -f 2)"
         ANDROID_VERSION="$(grep "^ro.build.version.release=" "$BUILD_PROP" | cut -d "=" -f 2)"
         SECURITY_PATCH="$(grep "^ro.build.version.security_patch=" "$BUILD_PROP" | cut -d "=" -f 2)"
 
@@ -114,6 +115,7 @@ FLASHABLE_ZIP_CREATION() {
             echo "build_date=$(date +%F)"
             echo "android_version=$ANDROID_VERSION"
             echo "oneui_version=$ONEUI_VERSION"
+            echo "oneui_code=$ONEUI_VERSION_UNCUT"
             echo "security_patch=$SECURITY_PATCH"
             echo "build_fingerprint=$FINGERPRINT"
             echo "kernel_version=$KERNEL_VERSION"
