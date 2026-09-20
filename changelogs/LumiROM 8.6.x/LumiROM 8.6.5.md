@@ -3,6 +3,8 @@
 ## Fixes
 - Fixed black recents preview by switching to the OpenGL renderer.
 - Fixed app crashing due to vulkan.
+- Fixed the turn off hotspot bug that has been present since ages.
+- [a22] Fixed camera bug.
 
 ## Features
 - Added a full OTA update system with manifest and incremental support, so updates can be generated as small patches of the previous version.
@@ -11,6 +13,7 @@
 - Added software update onto settings that opens Cloudy.
 - Added LumiROM logo to About software.
 - Updated Cloudy to `2.4`.
+- Added more wallpapers to the ROM, check them out! Thanks to [elytra](https://github.com/vivacumtechh) for doing it!
 
 ## More
 - [Repo] OTA builds: incremental target files in TARGET_FILES, OTA signing with LumiROM keys, official builds now detected by platform certificate (no more firmware-hash hacks).
