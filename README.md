@@ -31,7 +31,7 @@ It focuses on stability while upgrading the Android version, so you can test new
 
 It downloads the firmware from Samsung servers using [samloader](https://github.com/ananjaser1211/samloader), extracts the partition images and then applies all the features implemented in the repository - Galaxy AI, heavy debloat, Knox patches, performance tweaks and QoL improvements - so the device can be used again with a fresh and modern experience.
 
-The whole process can run either on **GitHub Actions** or **locally** on your machine (requires Ubuntu/Debian distro or WSL).
+The whole process can run either on **GitHub Actions** or **locally** on your machine (requires Ubuntu/Debian distro or WSL) - either with the CLI script or with the **LumiROM Builder** terminal UI.
 
 ## Changelogs
 Check the [changelogs folder](https://github.com/LumiROM/LumiROM/blob/OneUI8.5/changelogs/README.md) to learn more about each release and useful information.
@@ -166,7 +166,7 @@ Use the `DESTINATION` option to choose where the ROM will be uploaded - Hugging 
 #### 7. Images Only (Optional):
 Tick the `ZIP_IMG` option if you want the partition images (.img) inside a ZIP instead of a flashable ROM - useful if you prefer flashing the images yourself. Leave it disabled to get the normal flashable ZIP.
 
-### Method 2: Local Build
+### Method 2: Local Build (CLI)
 
 You can also build LumiROM directly on your Linux machine using the local build script. This method includes a **firmware cache system** so you only need to download the firmware once.
 
@@ -236,6 +236,55 @@ bash scripts/firmware/cache_manager.sh clear     # Clear cached images
 > If you don't want to mess with the repo or don't know how to do any of this, I will keep releasing updates of my ROM on my [Telegram channel](https://t.me/LumiROMs).
 > Suggestions are welcome too - I'm still learning from this project, so if you find a bug or want to make the code a bit easier to understand, feel free to open a pull request!
 
+### Method 3: Local Build (TUI)
+
+If you prefer a guided interface, **LumiROM Builder** is a terminal UI (TUI) that wraps `build_local.sh`. You fill a form on the right, watch the build run in an embedded terminal on the left, and get the resulting ZIP listed when it finishes.
+
+#### Requirements:
+- The same as Method 2 (Ubuntu/Debian or WSL).
+- Python 3.10 or newer.
+
+#### 1. Clone the repository and enter it:
+```bash
+git clone https://github.com/LumiROM/LumiROM.git
+cd LumiROM
+```
+
+> [!IMPORTANT]
+> Like the CLI method, the TUI reads `LUMIROM_VERSION` from a `.env` file in the repository root. Create it if you don't have one:
+> ```bash
+> echo 'export LUMIROM_VERSION="1.0.0"' >> .env
+> ```
+
+#### 2. Install the TUI dependencies:
+```bash
+python3 -m pip install --break-system-packages -r scripts/tui/requirements.txt
+```
+
+#### 3. Launch the TUI:
+```bash
+python3 -m scripts.tui
+```
+
+#### 4. Fill the form and build:
+On the right panel, choose your **Stock device**, type the **CSC/region** (3 letters, always uppercased automatically) and the **IMEI** of the base device, then set your **Maintainer** name. You can also toggle mods, Galaxy AI, the BPF-legacy option, image-only ZIP delivery and an incremental build. The exact command is always previewed on the left.
+
+Press **Start Build** and the build runs in the terminal panel on the left. Since it is a real terminal, colors, progress bars and `sudo` prompts all work as usual - type your password there when asked.
+
+#### Controls:
+| Control | Action |
+| :--- | :--- |
+| `Start Build` | Validate the form and start the build |
+| `Cancel Build` / `Ctrl+X` | Stop a running build |
+| `Ctrl+S` | Save the current form |
+| `Ctrl+Q` | Quit |
+
+> [!TIP]
+> The form is remembered in `scripts/tui/.tui_state.json` and restored the next time you launch the TUI.
+
+> [!NOTE]
+> The TUI runs the exact same steps as the CLI method, so the [firmware cache](#4-manage-firmware-cache) and the output in the `ROM/` folder work identically.
+
 ## Installing the ROM
 
 > [!WARNING]
@@ -272,3 +321,5 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 - **[e2fsprogs](https://github.com/tytso/e2fsprogs)** - Licensed under GPL-2.0 / LGPL-2.1
 - **[img2sdat](https://github.com/xpirt/img2sdat)** - Licensed under the MIT License
 - **[samloader](https://github.com/samloader/samloader)** - Licensed under GPL-3.0
+- **[Textual](https://github.com/Textualize/textual)** - Licensed under the MIT License (TUI only)
+- **[textual-tty](https://github.com/bitplane/textual-tty)** - WTFPL with one additional clause (TUI only)

@@ -27,3 +27,7 @@ apt_fast_setup.log
 # OS Specific
 .DS_Store
 .thumbs.db
+
+# TUI
+__pycache__/
+scripts/tui/.tui_state.json
